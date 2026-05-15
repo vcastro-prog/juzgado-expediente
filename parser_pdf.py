@@ -29,7 +29,6 @@ CABECERAS_Y_PIES = [
     "F. Aceptación",
     "Fase Procesal",
     "Último trámite",
-    "Plaza Nº",
     "Procedimiento",
     "Materia",
     "Página:",
@@ -37,6 +36,17 @@ CABECERAS_Y_PIES = [
     "Fecha Últ. Trámite",
     "Próximo Trámite",
 ]
+
+
+class PDFConVariosJuzgadosError(Exception):
+    def __init__(self, juzgados_detectados):
+        self.juzgados_detectados = juzgados_detectados
+        mensaje = (
+            "El PDF parece contener varios juzgados u órganos distintos. "
+            "Cárgalo separado, un PDF por juzgado. Detectados: "
+            + " | ".join(juzgados_detectados)
+        )
+        super().__init__(mensaje)
 
 
 def limpiar_texto(texto: str) -> str:
@@ -65,40 +75,110 @@ def extraer_texto(pdf_file) -> str:
     return "\n".join(paginas)
 
 
-def extraer_juzgado(texto: str) -> str:
-    """
-    Intenta extraer el órgano/juzgado desde el encabezado del PDF.
-    En los PDFs de ALARDE suele aparecer una línea similar a:
-    "Plaza Nº 1 del Tribunal de Instancia (Sección Civil)".
-    """
-    candidatos = []
+def normalizar_organo(organo: str) -> str:
+    organo = limpiar_texto(organo)
+    organo = organo.replace("No", "Nº")
+    organo = re.sub(r"\s+", " ", organo)
+    return organo.strip()
+
+
+def es_linea_organo(linea: str) -> bool:
+    limpia = normalizar_organo(linea)
+
+    if not limpia:
+        return False
+
+    if EXPEDIENTE_RE.match(limpia):
+        return False
+
+    patrones = [
+        r"Plaza\s*N[ºo]\s*\d+",
+        r"Juzgado.*\bN[ºo]\s*\d+",
+        r"Juzgado.*\bn[uú]m\.?\s*\d+",
+        r"Tribunal de Instancia",
+        r"Secci[oó]n\s+\w+",
+    ]
+
+    return any(re.search(p, limpia, re.IGNORECASE) for p in patrones)
+
+
+def lineas_organo_detectadas(texto: str) -> List[str]:
+    organos = []
 
     for linea in texto.splitlines():
-        limpia = limpiar_texto(linea)
-
-        if not limpia:
-            continue
+        limpia = normalizar_organo(linea)
 
         if "Página:" in limpia:
             limpia = limpia.split("Página:")[0].strip()
 
-        if (
-            "Plaza Nº" in limpia
-            or "Plaza No" in limpia
-            or "Juzgado" in limpia
-            or "Tribunal de Instancia" in limpia
-            or "Sección" in limpia
-            or "Seccion" in limpia
-        ):
-            if len(limpia) > 5 and not EXPEDIENTE_RE.match(limpia):
-                candidatos.append(limpia)
+        if es_linea_organo(limpia):
+            # Evitar líneas de cabecera genérica sin identificación real.
+            if len(limpia) >= 8:
+                organos.append(limpia)
 
-    if candidatos:
-        # Preferimos la línea más descriptiva.
-        candidatos = sorted(candidatos, key=len, reverse=True)
-        return candidatos[0]
+    # Quitamos duplicados conservando orden.
+    unicos = []
+    vistos = set()
 
-    return "Sin juzgado detectado"
+    for o in organos:
+        clave = o.lower()
+        if clave not in vistos:
+            unicos.append(o)
+            vistos.add(clave)
+
+    return unicos
+
+
+def analizar_organo(organo_completo: str) -> Dict[str, str]:
+    organo = normalizar_organo(organo_completo)
+
+    numero = ""
+    tipo = ""
+    seccion = ""
+
+    m_num = re.search(r"(?:Plaza|Juzgado)?\s*N[ºo]\s*(\d+)", organo, re.IGNORECASE)
+    if not m_num:
+        m_num = re.search(r"n[uú]m\.?\s*(\d+)", organo, re.IGNORECASE)
+    if m_num:
+        numero = m_num.group(1)
+
+    m_seccion = re.search(r"\(([^)]*Secci[oó]n[^)]*)\)", organo, re.IGNORECASE)
+    if not m_seccion:
+        m_seccion = re.search(r"(Secci[oó]n\s+[A-Za-zÁÉÍÓÚáéíóúÑñ ]+)", organo, re.IGNORECASE)
+    if m_seccion:
+        seccion = limpiar_texto(m_seccion.group(1))
+
+    if "Tribunal de Instancia" in organo:
+        tipo = "Tribunal de Instancia"
+    elif re.search(r"Juzgado de Primera Instancia", organo, re.IGNORECASE):
+        tipo = "Juzgado de Primera Instancia"
+    elif re.search(r"Juzgado", organo, re.IGNORECASE):
+        tipo = "Juzgado"
+    elif "Plaza" in organo:
+        tipo = "Plaza"
+    else:
+        tipo = "Sin tipo detectado"
+
+    return {
+        "organo_completo": organo or "Sin órgano detectado",
+        "juzgado_numero": numero,
+        "juzgado_tipo": tipo,
+        "juzgado_seccion": seccion,
+    }
+
+
+def extraer_juzgado_info(texto: str) -> Dict[str, str]:
+    organos = lineas_organo_detectadas(texto)
+
+    # Si no detecta nada, dejamos un valor controlado.
+    if not organos:
+        return analizar_organo("Sin órgano detectado")
+
+    # Si detecta más de un órgano diferente, bloqueamos la importación.
+    if len(organos) > 1:
+        raise PDFConVariosJuzgadosError(organos)
+
+    return analizar_organo(organos[0])
 
 
 def dividir_en_bloques(texto: str) -> List[str]:
@@ -107,7 +187,7 @@ def dividir_en_bloques(texto: str) -> List[str]:
 
     for linea in texto.splitlines():
         linea = limpiar_texto(linea)
-        if es_linea_ruido(linea):
+        if es_linea_ruido(linea) or es_linea_organo(linea):
             continue
 
         if EXPEDIENTE_RE.match(linea):
@@ -200,14 +280,18 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
 
 def extraer_expedientes(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
-    juzgado = extraer_juzgado(texto)
+    juzgado_info = extraer_juzgado_info(texto)
     bloques = dividir_en_bloques(texto)
     registros = []
 
     for bloque in bloques:
         reg = parsear_bloque(bloque)
         if reg and reg.get("numero_procedimiento"):
-            reg["juzgado"] = juzgado
+            reg["juzgado"] = juzgado_info["organo_completo"]
+            reg["organo_completo"] = juzgado_info["organo_completo"]
+            reg["juzgado_numero"] = juzgado_info["juzgado_numero"]
+            reg["juzgado_tipo"] = juzgado_info["juzgado_tipo"]
+            reg["juzgado_seccion"] = juzgado_info["juzgado_seccion"]
             reg["clave_expediente"] = crear_clave(reg)
             registros.append(reg)
 
@@ -215,9 +299,8 @@ def extraer_expedientes(pdf_file) -> List[Dict]:
 
 
 def crear_clave(reg: Dict) -> str:
-    # Incluimos juzgado porque varios órganos pueden tener el mismo número de procedimiento.
     partes = [
-        reg.get("juzgado", ""),
+        reg.get("organo_completo", ""),
         reg.get("numero_procedimiento", ""),
         reg.get("fecha_aceptacion", ""),
         reg.get("procedimiento", ""),

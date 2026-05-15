@@ -55,7 +55,7 @@ if not st.session_state.autenticado:
 
     st.stop()
 
-from parser_pdf import extraer_expedientes
+from parser_pdf import extraer_expedientes, PDFConVariosJuzgadosError
 from database import (
     guardar_importacion,
     cargar_expedientes,
@@ -162,6 +162,24 @@ with st.sidebar:
                             }
                         )
 
+                    except PDFConVariosJuzgadosError as e:
+                        resumen_importacion.append(
+                            {
+                                "Archivo": pdf.name,
+                                "Expedientes leídos": 0,
+                                "Cambios/nuevos detectados": 0,
+                                "Estado": "Bloqueado: varios juzgados detectados",
+                            }
+                        )
+                        st.error(
+                            f"{pdf.name}: el PDF contiene varios juzgados u órganos. "
+                            "No se ha importado ningún dato de este archivo. "
+                            "Vuelve a cargarlo separado, un PDF por juzgado."
+                        )
+                        st.write("Órganos detectados:")
+                        for organo in e.juzgados_detectados:
+                            st.write(f"- {organo}")
+
                     except Exception as e:
                         resumen_importacion.append(
                             {
@@ -230,6 +248,9 @@ with tab_actuales:
             col1, col2, col3, col4 = st.columns(4)
 
             juzgados = sorted([x for x in df["Juzgado"].dropna().unique() if x])
+            numeros_juzgado = sorted([x for x in df["Nº Juzgado"].dropna().unique() if x])
+            tipos_organo = sorted([x for x in df["Tipo órgano"].dropna().unique() if x])
+            secciones = sorted([x for x in df["Sección"].dropna().unique() if x])
             procedimientos = sorted([x for x in df["Procedimiento"].dropna().unique() if x])
             fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
             materias = sorted([x for x in df["Materia"].dropna().unique() if x])
@@ -256,6 +277,10 @@ with tab_actuales:
             )
 
             juzgado = st.multiselect("Juzgado / órgano", juzgados)
+            col_j1, col_j2, col_j3 = st.columns(3)
+            filtro_num_juzgado = col_j1.multiselect("Nº juzgado", numeros_juzgado)
+            filtro_tipo_organo = col_j2.multiselect("Tipo órgano", tipos_organo)
+            filtro_seccion = col_j3.multiselect("Sección", secciones)
             procedimiento = st.multiselect("Procedimiento", procedimientos)
             fase = st.multiselect("Fase procesal", fases)
             materia = st.multiselect("Materia", materias)
@@ -293,6 +318,15 @@ with tab_actuales:
         if juzgado:
             filtrado = filtrado[filtrado["Juzgado"].isin(juzgado)]
 
+        if filtro_num_juzgado:
+            filtrado = filtrado[filtrado["Nº Juzgado"].isin(filtro_num_juzgado)]
+
+        if filtro_tipo_organo:
+            filtrado = filtrado[filtrado["Tipo órgano"].isin(filtro_tipo_organo)]
+
+        if filtro_seccion:
+            filtrado = filtrado[filtrado["Sección"].isin(filtro_seccion)]
+
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
         if fase:
@@ -313,7 +347,10 @@ with tab_actuales:
             st.info("No hay expedientes para los filtros seleccionados.")
         else:
             resumen_juzgado = (
-                filtrado.groupby("Juzgado", dropna=False)
+                filtrado.groupby(
+                    ["Nº Juzgado", "Tipo órgano", "Sección", "Órgano completo"],
+                    dropna=False
+                )
                 .size()
                 .reset_index(name="Expedientes")
                 .sort_values("Expedientes", ascending=False)
@@ -328,7 +365,7 @@ with tab_actuales:
             for idx, row in resumen_juzgado.head(4).reset_index(drop=True).iterrows():
                 with cols_juzgados[idx]:
                     st.metric(
-                        label=str(row["Juzgado"]),
+                        label="Juzgado " + str(row["Nº Juzgado"] or "sin nº"),
                         value=int(row["Expedientes"]),
                         delta=f'{row["%"]}% del filtro',
                     )
@@ -350,7 +387,10 @@ with tab_actuales:
             "Nº Proced.",
             "Año",
             "F. Aceptación",
-            "Juzgado",
+            "Nº Juzgado",
+            "Tipo órgano",
+            "Sección",
+            "Órgano completo",
             "Procedimiento",
             "Materia",
             "Fase Procesal",
@@ -402,7 +442,9 @@ with tab_modificados:
                     [
                         "⭐",
                         "Nº Proced.",
-                        "Juzgado",
+                        "Nº Juzgado",
+                        "Tipo órgano",
+                        "Sección",
                         "Procedimiento",
                         "Materia",
                         "Fase Procesal",
@@ -449,7 +491,10 @@ with tab_detalle:
 
         with col1:
             st.markdown(f"### {detalle.get('numero_procedimiento', '')}")
-            st.write(f"**Juzgado:** {detalle.get('juzgado', '')}")
+            st.write(f"**Nº juzgado:** {detalle.get('juzgado_numero', '')}")
+            st.write(f"**Tipo órgano:** {detalle.get('juzgado_tipo', '')}")
+            st.write(f"**Sección:** {detalle.get('juzgado_seccion', '')}")
+            st.write(f"**Órgano completo:** {detalle.get('organo_completo', detalle.get('juzgado', ''))}")
             st.write(f"**Procedimiento:** {detalle.get('procedimiento', '')}")
             st.write(f"**Materia:** {detalle.get('materia', '')}")
             st.write(f"**Fase procesal:** {detalle.get('fase_procesal', '')}")
