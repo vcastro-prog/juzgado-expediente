@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("⚖️ Control de procedimientos del juzgado")
-st.caption("Sube el PDF diario, actualiza expedientes y revisa los cambios detectados.")
+st.caption("Sube uno o varios PDFs, actualiza expedientes y revisa los cambios detectados.")
 
 
 def descargar_excel(df_dict):
@@ -33,23 +33,67 @@ def descargar_excel(df_dict):
 
 
 with st.sidebar:
-    st.header("Importar PDF")
-    pdf = st.file_uploader("PDF diario", type=["pdf"])
+    st.header("Importar PDFs")
 
-    if pdf is not None:
-        if st.button("Procesar PDF", type="primary"):
-            with st.spinner("Leyendo PDF y actualizando base de datos..."):
-                registros = extraer_expedientes(pdf)
-                cambios = guardar_importacion(registros, nombre_archivo=pdf.name)
+    pdfs = st.file_uploader(
+        "Selecciona uno o varios PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+    )
 
-            st.success(f"Expedientes leídos: {len(registros)}")
-            st.info(f"Cambios/nuevos detectados: {len(cambios)}")
+    if pdfs:
+        if st.button("Procesar PDFs", type="primary"):
+            total_registros = 0
+            total_cambios = 0
+            total_pdfs = len(pdfs)
+            resumen_importacion = []
 
-            if len(cambios):
-                st.dataframe(cambios, use_container_width=True)
+            with st.spinner("Leyendo PDFs y actualizando base de datos..."):
+                for pdf in pdfs:
+                    try:
+                        registros = extraer_expedientes(pdf)
+                        cambios = guardar_importacion(
+                            registros,
+                            nombre_archivo=pdf.name,
+                        )
+
+                        total_registros += len(registros)
+                        total_cambios += len(cambios)
+
+                        resumen_importacion.append(
+                            {
+                                "Archivo": pdf.name,
+                                "Expedientes leídos": len(registros),
+                                "Cambios/nuevos detectados": len(cambios),
+                                "Estado": "Procesado",
+                            }
+                        )
+
+                    except Exception as e:
+                        resumen_importacion.append(
+                            {
+                                "Archivo": pdf.name,
+                                "Expedientes leídos": 0,
+                                "Cambios/nuevos detectados": 0,
+                                "Estado": f"Error: {e}",
+                            }
+                        )
+                        st.error(f"Error procesando {pdf.name}: {e}")
+
+            st.success(f"PDFs procesados: {total_pdfs}")
+            st.info(f"Expedientes leídos: {total_registros}")
+            st.info(f"Cambios/nuevos detectados: {total_cambios}")
+
+            if resumen_importacion:
+                st.subheader("Resumen de importación")
+                st.dataframe(
+                    pd.DataFrame(resumen_importacion),
+                    use_container_width=True,
+                )
 
     st.divider()
     st.warning("Zona de mantenimiento")
+
     confirmar = st.checkbox("Confirmo que quiero borrar la base local")
     if confirmar and st.button("Borrar base de datos"):
         resetear_base()
@@ -77,7 +121,7 @@ with tab_actuales:
     st.subheader("Expedientes actuales")
 
     if df.empty:
-        st.info("Aún no hay expedientes. Sube un PDF desde la barra lateral.")
+        st.info("Aún no hay expedientes. Sube uno o varios PDFs desde la barra lateral.")
     else:
         col1, col2, col3 = st.columns(3)
 
@@ -95,10 +139,13 @@ with tab_actuales:
 
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
+
         if fase:
             filtrado = filtrado[filtrado["Fase Procesal"].isin(fase)]
+
         if materia:
             filtrado = filtrado[filtrado["Materia"].isin(materia)]
+
         if texto:
             patron = texto.lower()
             mascara = filtrado.apply(
@@ -108,7 +155,13 @@ with tab_actuales:
             filtrado = filtrado[mascara]
 
         st.write(f"Mostrando {len(filtrado)} de {len(df)} expedientes.")
-        st.dataframe(filtrado.drop(columns=["clave_expediente"]), use_container_width=True, height=600)
+
+        st.dataframe(
+            filtrado.drop(columns=["clave_expediente"], errors="ignore"),
+            use_container_width=True,
+            height=600,
+        )
+
 
 with tab_cambios:
     st.subheader("Histórico de cambios")
@@ -128,14 +181,24 @@ with tab_cambios:
             filtrado_cambios = filtrado_cambios[mascara]
 
         st.dataframe(
-            filtrado_cambios.drop(columns=["clave_expediente"]),
+            filtrado_cambios.drop(columns=["clave_expediente"], errors="ignore"),
             use_container_width=True,
             height=600,
         )
 
+
 with tab_importaciones:
     st.subheader("Importaciones realizadas")
-    st.dataframe(df_importaciones, use_container_width=True, height=500)
+
+    if df_importaciones.empty:
+        st.info("Aún no hay importaciones registradas.")
+    else:
+        st.dataframe(
+            df_importaciones,
+            use_container_width=True,
+            height=500,
+        )
+
 
 with tab_exportar:
     st.subheader("Exportar datos")
