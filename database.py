@@ -1,0 +1,280 @@
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict
+
+import pandas as pd
+
+
+DB_PATH = Path("data/expedientes.sqlite")
+
+
+CAMPOS_ESTADO = [
+    "numero_procedimiento",
+    "fecha_aceptacion",
+    "materia",
+    "fase_procesal",
+    "ultimo_tramite",
+    "fecha_ultimo_tramite",
+    "procedimiento",
+    "texto_original",
+]
+
+
+def get_conn():
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    inicializar(conn)
+    return conn
+
+
+def inicializar(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS expedientes (
+            clave_expediente TEXT PRIMARY KEY,
+            numero_procedimiento TEXT,
+            fecha_aceptacion TEXT,
+            materia TEXT,
+            fase_procesal TEXT,
+            ultimo_tramite TEXT,
+            fecha_ultimo_tramite TEXT,
+            procedimiento TEXT,
+            texto_original TEXT,
+            primera_importacion TEXT,
+            ultima_importacion TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historico_cambios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clave_expediente TEXT,
+            numero_procedimiento TEXT,
+            fecha_cambio TEXT,
+            campo TEXT,
+            valor_anterior TEXT,
+            valor_nuevo TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS importaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha_importacion TEXT,
+            nombre_archivo TEXT,
+            expedientes_leidos INTEGER,
+            cambios_detectados INTEGER,
+            nuevos_detectados INTEGER
+        )
+        """
+    )
+    conn.commit()
+
+
+def normalizar_valor(v):
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.DataFrame:
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cambios = []
+    nuevos = 0
+
+    with get_conn() as conn:
+        for reg in registros:
+            clave = reg["clave_expediente"]
+            actual = conn.execute(
+                "SELECT * FROM expedientes WHERE clave_expediente = ?",
+                (clave,),
+            ).fetchone()
+
+            if actual is None:
+                nuevos += 1
+                conn.execute(
+                    """
+                    INSERT INTO expedientes (
+                        clave_expediente, numero_procedimiento, fecha_aceptacion,
+                        materia, fase_procesal, ultimo_tramite, fecha_ultimo_tramite,
+                        procedimiento, texto_original, primera_importacion, ultima_importacion
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clave,
+                        reg.get("numero_procedimiento", ""),
+                        reg.get("fecha_aceptacion", ""),
+                        reg.get("materia", ""),
+                        reg.get("fase_procesal", ""),
+                        reg.get("ultimo_tramite", ""),
+                        reg.get("fecha_ultimo_tramite", ""),
+                        reg.get("procedimiento", ""),
+                        reg.get("texto_original", ""),
+                        ahora,
+                        ahora,
+                    ),
+                )
+                cambios.append(
+                    {
+                        "numero_procedimiento": reg.get("numero_procedimiento", ""),
+                        "clave_expediente": clave,
+                        "campo": "NUEVO",
+                        "valor_anterior": "",
+                        "valor_nuevo": "Expediente incorporado",
+                        "fecha_cambio": ahora,
+                    }
+                )
+            else:
+                hubo_cambio = False
+                for campo in CAMPOS_ESTADO:
+                    anterior = normalizar_valor(actual[campo])
+                    nuevo = normalizar_valor(reg.get(campo, ""))
+                    if anterior != nuevo:
+                        hubo_cambio = True
+                        conn.execute(
+                            """
+                            INSERT INTO historico_cambios (
+                                clave_expediente, numero_procedimiento, fecha_cambio,
+                                campo, valor_anterior, valor_nuevo
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                clave,
+                                reg.get("numero_procedimiento", ""),
+                                ahora,
+                                campo,
+                                anterior,
+                                nuevo,
+                            ),
+                        )
+                        cambios.append(
+                            {
+                                "numero_procedimiento": reg.get("numero_procedimiento", ""),
+                                "clave_expediente": clave,
+                                "campo": campo,
+                                "valor_anterior": anterior,
+                                "valor_nuevo": nuevo,
+                                "fecha_cambio": ahora,
+                            }
+                        )
+
+                if hubo_cambio:
+                    conn.execute(
+                        """
+                        UPDATE expedientes
+                        SET numero_procedimiento = ?,
+                            fecha_aceptacion = ?,
+                            materia = ?,
+                            fase_procesal = ?,
+                            ultimo_tramite = ?,
+                            fecha_ultimo_tramite = ?,
+                            procedimiento = ?,
+                            texto_original = ?,
+                            ultima_importacion = ?
+                        WHERE clave_expediente = ?
+                        """,
+                        (
+                            reg.get("numero_procedimiento", ""),
+                            reg.get("fecha_aceptacion", ""),
+                            reg.get("materia", ""),
+                            reg.get("fase_procesal", ""),
+                            reg.get("ultimo_tramite", ""),
+                            reg.get("fecha_ultimo_tramite", ""),
+                            reg.get("procedimiento", ""),
+                            reg.get("texto_original", ""),
+                            ahora,
+                            clave,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE expedientes SET ultima_importacion = ? WHERE clave_expediente = ?",
+                        (ahora, clave),
+                    )
+
+        conn.execute(
+            """
+            INSERT INTO importaciones (
+                fecha_importacion, nombre_archivo, expedientes_leidos,
+                cambios_detectados, nuevos_detectados
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (ahora, nombre_archivo, len(registros), len(cambios), nuevos),
+        )
+
+        conn.commit()
+
+    return pd.DataFrame(cambios)
+
+
+def cargar_expedientes() -> pd.DataFrame:
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                numero_procedimiento AS 'Nº Proced.',
+                fecha_aceptacion AS 'F. Aceptación',
+                procedimiento AS 'Procedimiento',
+                materia AS 'Materia',
+                fase_procesal AS 'Fase Procesal',
+                ultimo_tramite AS 'Último trámite',
+                fecha_ultimo_tramite AS 'Fecha Últ. Trámite',
+                primera_importacion AS 'Primera importación',
+                ultima_importacion AS 'Última importación',
+                clave_expediente
+            FROM expedientes
+            ORDER BY numero_procedimiento
+            """,
+            conn,
+        )
+
+
+def cargar_cambios() -> pd.DataFrame:
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                fecha_cambio AS 'Fecha cambio',
+                numero_procedimiento AS 'Nº Proced.',
+                campo AS 'Campo',
+                valor_anterior AS 'Valor anterior',
+                valor_nuevo AS 'Valor nuevo',
+                clave_expediente
+            FROM historico_cambios
+            ORDER BY id DESC
+            """,
+            conn,
+        )
+
+
+def cargar_importaciones() -> pd.DataFrame:
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                fecha_importacion AS 'Fecha importación',
+                nombre_archivo AS 'Archivo',
+                expedientes_leidos AS 'Expedientes leídos',
+                cambios_detectados AS 'Cambios detectados',
+                nuevos_detectados AS 'Nuevos'
+            FROM importaciones
+            ORDER BY id DESC
+            """,
+            conn,
+        )
+
+
+def resetear_base():
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+    with get_conn():
+        pass
