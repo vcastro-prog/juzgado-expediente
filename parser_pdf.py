@@ -77,6 +77,16 @@ def extraer_texto(pdf_file) -> str:
 
 def normalizar_organo(organo: str) -> str:
     organo = limpiar_texto(organo)
+
+    # Muchos PDFs muestran:
+    # "Órgano de registro: Plaza Nº 9 del Tribunal de Instancia (Sección Civil)"
+    # Para comparar juzgados, nos quedamos solo con la parte posterior a los dos puntos.
+    if "Órgano de registro:" in organo:
+        organo = organo.split("Órgano de registro:", 1)[1].strip()
+
+    if "Página:" in organo:
+        organo = organo.split("Página:", 1)[0].strip()
+
     organo = organo.replace("No", "Nº")
     organo = re.sub(r"\s+", " ", organo)
     return organo.strip()
@@ -92,41 +102,13 @@ def es_linea_organo(linea: str) -> bool:
         return False
 
     patrones = [
-        r"Plaza\s*N[ºo]\s*\d+",
-        r"Juzgado.*\bN[ºo]\s*\d+",
-        r"Juzgado.*\bn[uú]m\.?\s*\d+",
-        r"Tribunal de Instancia",
-        r"Secci[oó]n\s+\w+",
+        r"^Plaza\s*N[ºo]\s*\d+",
+        r"^Juzgado.*\bN[ºo]\s*\d+",
+        r"^Juzgado.*\bn[uú]m\.?\s*\d+",
+        r"^.*Tribunal de Instancia.*$",
     ]
 
     return any(re.search(p, limpia, re.IGNORECASE) for p in patrones)
-
-
-def lineas_organo_detectadas(texto: str) -> List[str]:
-    organos = []
-
-    for linea in texto.splitlines():
-        limpia = normalizar_organo(linea)
-
-        if "Página:" in limpia:
-            limpia = limpia.split("Página:")[0].strip()
-
-        if es_linea_organo(limpia):
-            # Evitar líneas de cabecera genérica sin identificación real.
-            if len(limpia) >= 8:
-                organos.append(limpia)
-
-    # Quitamos duplicados conservando orden.
-    unicos = []
-    vistos = set()
-
-    for o in organos:
-        clave = o.lower()
-        if clave not in vistos:
-            unicos.append(o)
-            vistos.add(clave)
-
-    return unicos
 
 
 def analizar_organo(organo_completo: str) -> Dict[str, str]:
@@ -154,7 +136,7 @@ def analizar_organo(organo_completo: str) -> Dict[str, str]:
         tipo = "Juzgado de Primera Instancia"
     elif re.search(r"Juzgado", organo, re.IGNORECASE):
         tipo = "Juzgado"
-    elif "Plaza" in organo:
+    elif re.search(r"Plaza\s*N[ºo]\s*\d+", organo, re.IGNORECASE):
         tipo = "Plaza"
     else:
         tipo = "Sin tipo detectado"
@@ -167,18 +149,66 @@ def analizar_organo(organo_completo: str) -> Dict[str, str]:
     }
 
 
+def clave_organo(info: Dict[str, str]) -> str:
+    """
+    Compara órganos por los campos estructurados, no por el texto exacto.
+    Así no se bloquea un PDF porque una página diga:
+    "Órgano de registro: Plaza Nº 9..."
+    y otra solo:
+    "Plaza Nº 9...".
+    """
+    return "|".join(
+        [
+            (info.get("juzgado_numero") or "").strip().lower(),
+            (info.get("juzgado_tipo") or "").strip().lower(),
+            (info.get("juzgado_seccion") or "").strip().lower(),
+        ]
+    )
+
+
+def lineas_organo_detectadas(texto: str) -> List[str]:
+    organos = []
+
+    for linea in texto.splitlines():
+        limpia = normalizar_organo(linea)
+
+        if es_linea_organo(limpia) and len(limpia) >= 8:
+            organos.append(limpia)
+
+    # Quitamos duplicados conservando orden.
+    unicos = []
+    vistos = set()
+
+    for o in organos:
+        clave = o.lower()
+        if clave not in vistos:
+            unicos.append(o)
+            vistos.add(clave)
+
+    return unicos
+
+
 def extraer_juzgado_info(texto: str) -> Dict[str, str]:
     organos = lineas_organo_detectadas(texto)
 
-    # Si no detecta nada, dejamos un valor controlado.
     if not organos:
         return analizar_organo("Sin órgano detectado")
 
-    # Si detecta más de un órgano diferente, bloqueamos la importación.
-    if len(organos) > 1:
-        raise PDFConVariosJuzgadosError(organos)
+    # Agrupamos por órgano estructurado. Si todos son Plaza 9 / Tribunal / Sección Civil,
+    # aunque el encabezado se repita en 250 páginas, se acepta.
+    grupos = {}
+    for organo in organos:
+        info = analizar_organo(organo)
+        grupos.setdefault(clave_organo(info), []).append(info)
 
-    return analizar_organo(organos[0])
+    if len(grupos) > 1:
+        representantes = []
+        for infos in grupos.values():
+            representantes.append(infos[0]["organo_completo"])
+        raise PDFConVariosJuzgadosError(representantes)
+
+    # Un único órgano real.
+    return list(grupos.values())[0][0]
 
 
 def dividir_en_bloques(texto: str) -> List[str]:

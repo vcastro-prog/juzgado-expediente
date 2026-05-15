@@ -360,25 +360,25 @@ with tab_actuales:
                 resumen_juzgado["Expedientes"] / total_filtrado * 100
             ).round(1)
 
-            cols_juzgados = st.columns(min(len(resumen_juzgado), 4))
+            # Mostramos TODOS los juzgados, no solo los cuatro mayores.
+            resumen_cards = resumen_juzgado.reset_index(drop=True)
 
-            for idx, row in resumen_juzgado.head(4).reset_index(drop=True).iterrows():
-                with cols_juzgados[idx]:
-                    st.metric(
-                        label="Juzgado " + str(row["Nº Juzgado"] or "sin nº"),
-                        value=int(row["Expedientes"]),
-                        delta=f'{row["%"]}% del filtro',
-                    )
+            for inicio in range(0, len(resumen_cards), 4):
+                cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
 
-            if len(resumen_juzgado) > 4:
-                st.caption(f"Hay {len(resumen_juzgado)} juzgados en total. La tabla inferior muestra todos.")
+                for pos, (_, row) in enumerate(resumen_cards.iloc[inicio:inicio + 4].iterrows()):
+                    with cols_juzgados[pos]:
+                        st.metric(
+                            label="Juzgado " + str(row["Nº Juzgado"] or "sin nº"),
+                            value=int(row["Expedientes"]),
+                            delta=f'{row["%"]}% del filtro',
+                        )
 
-            with st.expander("Ver tabla completa de carga por juzgado", expanded=True):
-                st.dataframe(
-                    resumen_juzgado,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            st.dataframe(
+                resumen_juzgado,
+                use_container_width=True,
+                hide_index=True,
+            )
 
         st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df)} totales.")
 
