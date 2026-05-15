@@ -1,0 +1,5 @@
+data/
+*.pdf
+*.sqlite
+*.xlsx
+__pycache__/
