@@ -242,6 +242,16 @@ def cargar_expedientes() -> pd.DataFrame:
                 fase_procesal AS 'Fase Procesal',
                 ultimo_tramite AS 'Último trámite',
                 fecha_ultimo_tramite AS 'Fecha Últ. Trámite',
+                CASE
+                    WHEN fecha_ultimo_tramite IS NULL OR trim(fecha_ultimo_tramite) = ''
+                    THEN ''
+                    ELSE substr(fecha_ultimo_tramite, 7, 4)
+                END AS 'Año Últ. Trámite',
+                CASE
+                    WHEN fecha_ultimo_tramite IS NULL OR trim(fecha_ultimo_tramite) = ''
+                    THEN 'Sin iniciar trámite'
+                    ELSE 'Con trámite'
+                END AS 'Estado F. Últ. Trámite',
                 primera_importacion AS 'Primera importación',
                 ultima_importacion AS 'Última importación',
                 favorito AS 'Favorito',

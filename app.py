@@ -175,13 +175,25 @@ with tab_actuales:
             fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
             materias = sorted([x for x in df["Materia"].dropna().unique() if x])
             anios = sorted([x for x in df["Año"].dropna().unique() if x])
+            anios_ultimo_tramite = sorted([x for x in df["Año Últ. Trámite"].dropna().unique() if x])
 
             filtro_numero = col1.text_input("Nº procedimiento exacto o parcial")
-            filtro_anio = col2.multiselect("Año", anios)
+            filtro_anio = col2.multiselect("Año del procedimiento", anios)
             filtro_favoritos = col3.checkbox("Solo favoritos")
             filtro_archivados = col4.selectbox(
-                "Estado",
+                "Estado general",
                 ["Todos", "Excluir archivados", "Solo archivados"],
+            )
+
+            col_fecha1, col_fecha2 = st.columns(2)
+            filtro_anio_ultimo_tramite = col_fecha1.multiselect(
+                "Año de Fecha Últ. Trámite",
+                anios_ultimo_tramite,
+                help="Filtra por el año de la fecha del último trámite.",
+            )
+            filtro_fecha_vacia = col_fecha2.checkbox(
+                "Solo Fecha Últ. Trámite vacía",
+                help="Muestra expedientes sin fecha de último trámite. Sirve para localizar los que no han empezado a tramitarse.",
             )
 
             procedimiento = st.multiselect("Procedimiento", procedimientos)
@@ -210,6 +222,14 @@ with tab_actuales:
         elif filtro_archivados == "Solo archivados":
             filtrado = filtrado[filtrado["Archivado detectado"] == 1]
 
+        if filtro_fecha_vacia:
+            filtrado = filtrado[
+                filtrado["Fecha Últ. Trámite"].isna()
+                | (filtrado["Fecha Últ. Trámite"].astype(str).str.strip() == "")
+            ]
+        elif filtro_anio_ultimo_tramite:
+            filtrado = filtrado[filtrado["Año Últ. Trámite"].isin(filtro_anio_ultimo_tramite)]
+
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
         if fase:
@@ -236,6 +256,8 @@ with tab_actuales:
             "Fase Procesal",
             "Último trámite",
             "Fecha Últ. Trámite",
+            "Año Últ. Trámite",
+            "Estado F. Últ. Trámite",
             "Nota",
             "Última importación",
         ]
@@ -285,6 +307,8 @@ with tab_modificados:
                         "Fase Procesal",
                         "Último trámite",
                         "Fecha Últ. Trámite",
+                        "Año Últ. Trámite",
+                        "Estado F. Últ. Trámite",
                         "Nota",
                     ]
                 ],
