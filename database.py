@@ -17,6 +17,7 @@ CAMPOS_ESTADO = [
     "ultimo_tramite",
     "fecha_ultimo_tramite",
     "procedimiento",
+    "juzgado",
     "texto_original",
 ]
 
@@ -46,6 +47,7 @@ def inicializar(conn):
             ultimo_tramite TEXT,
             fecha_ultimo_tramite TEXT,
             procedimiento TEXT,
+            juzgado TEXT,
             texto_original TEXT,
             primera_importacion TEXT,
             ultima_importacion TEXT
@@ -86,6 +88,9 @@ def inicializar(conn):
     if not columna_existe(conn, "expedientes", "nota"):
         conn.execute("ALTER TABLE expedientes ADD COLUMN nota TEXT DEFAULT ''")
 
+    if not columna_existe(conn, "expedientes", "juzgado"):
+        conn.execute("ALTER TABLE expedientes ADD COLUMN juzgado TEXT DEFAULT 'Sin juzgado detectado'")
+
     conn.commit()
 
 
@@ -115,10 +120,10 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                     INSERT INTO expedientes (
                         clave_expediente, numero_procedimiento, fecha_aceptacion,
                         materia, fase_procesal, ultimo_tramite, fecha_ultimo_tramite,
-                        procedimiento, texto_original, primera_importacion, ultima_importacion,
+                        procedimiento, juzgado, texto_original, primera_importacion, ultima_importacion,
                         favorito, nota
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
                     """,
                     (
                         clave,
@@ -129,6 +134,7 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                         reg.get("ultimo_tramite", ""),
                         reg.get("fecha_ultimo_tramite", ""),
                         reg.get("procedimiento", ""),
+                        reg.get("juzgado", "Sin juzgado detectado"),
                         reg.get("texto_original", ""),
                         ahora,
                         ahora,
@@ -190,6 +196,7 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                             ultimo_tramite = ?,
                             fecha_ultimo_tramite = ?,
                             procedimiento = ?,
+                            juzgado = ?,
                             texto_original = ?,
                             ultima_importacion = ?
                         WHERE clave_expediente = ?
@@ -202,6 +209,7 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                             reg.get("ultimo_tramite", ""),
                             reg.get("fecha_ultimo_tramite", ""),
                             reg.get("procedimiento", ""),
+                            reg.get("juzgado", "Sin juzgado detectado"),
                             reg.get("texto_original", ""),
                             ahora,
                             clave,
@@ -237,6 +245,7 @@ def cargar_expedientes() -> pd.DataFrame:
                 numero_procedimiento AS 'Nº Proced.',
                 substr(numero_procedimiento, 9, 4) AS 'Año',
                 fecha_aceptacion AS 'F. Aceptación',
+                juzgado AS 'Juzgado',
                 procedimiento AS 'Procedimiento',
                 materia AS 'Materia',
                 fase_procesal AS 'Fase Procesal',

@@ -4,6 +4,57 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+
+# =========================
+# SEGURIDAD / LOGIN
+# =========================
+# La contraseña se configura en Streamlit Cloud:
+# App > Settings > Secrets
+#
+# Debe existir:
+# APP_PASSWORD = "tu_contraseña"
+#
+# En local puedes crear:
+# .streamlit/secrets.toml
+# con la misma línea.
+# Ese archivo NO debe subirse a GitHub.
+
+try:
+    PASSWORD_CORRECTA = st.secrets["APP_PASSWORD"]
+except Exception:
+    PASSWORD_CORRECTA = None
+
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+
+if not st.session_state.autenticado:
+    st.set_page_config(
+        page_title="Acceso privado",
+        page_icon="🔒",
+        layout="centered",
+    )
+
+    st.title("🔒 Acceso privado")
+    st.caption("Introduce la contraseña para acceder al control de expedientes.")
+
+    password = st.text_input(
+        "Contraseña",
+        type="password",
+    )
+
+    if st.button("Entrar", type="primary"):
+        if PASSWORD_CORRECTA is None:
+            st.error(
+                "No se ha configurado APP_PASSWORD en los Secrets de Streamlit."
+            )
+        elif password == PASSWORD_CORRECTA:
+            st.session_state.autenticado = True
+            st.rerun()
+        else:
+            st.error("Contraseña incorrecta")
+
+    st.stop()
+
 from parser_pdf import extraer_expedientes
 from database import (
     guardar_importacion,
@@ -70,6 +121,11 @@ def filtrar_por_fecha_cambio(df_cambios, dias):
 
 
 with st.sidebar:
+    if st.button("Cerrar sesión"):
+        st.session_state.autenticado = False
+        st.rerun()
+
+    st.divider()
     st.header("Importar PDFs")
 
     pdfs = st.file_uploader(
@@ -140,15 +196,17 @@ df = cargar_expedientes()
 df_cambios = cargar_cambios()
 df_importaciones = cargar_importaciones()
 
-metricas = st.columns(5)
-metricas[0].metric("Expedientes", len(df))
-metricas[1].metric("Favoritos", int(df["Favorito"].sum()) if not df.empty and "Favorito" in df else 0)
-metricas[2].metric("Cambios históricos", len(df_cambios))
-metricas[3].metric("Importaciones", len(df_importaciones))
-metricas[4].metric(
-    "Última importación",
-    df_importaciones["Fecha importación"].iloc[0] if len(df_importaciones) else "Sin datos",
-)
+with st.sidebar:
+    st.divider()
+    st.header("Datos generales")
+    st.metric("Expedientes totales", len(df))
+    st.metric("Favoritos", int(df["Favorito"].sum()) if not df.empty and "Favorito" in df else 0)
+    st.metric("Cambios históricos", len(df_cambios))
+    st.metric("Importaciones", len(df_importaciones))
+    st.caption(
+        "Última importación: "
+        + (df_importaciones["Fecha importación"].iloc[0] if len(df_importaciones) else "Sin datos")
+    )
 
 tab_actuales, tab_modificados, tab_detalle, tab_cambios, tab_importaciones, tab_exportar = st.tabs(
     [
@@ -171,6 +229,7 @@ with tab_actuales:
         with st.expander("Filtros avanzados", expanded=True):
             col1, col2, col3, col4 = st.columns(4)
 
+            juzgados = sorted([x for x in df["Juzgado"].dropna().unique() if x])
             procedimientos = sorted([x for x in df["Procedimiento"].dropna().unique() if x])
             fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
             materias = sorted([x for x in df["Materia"].dropna().unique() if x])
@@ -196,6 +255,7 @@ with tab_actuales:
                 help="Muestra expedientes sin fecha de último trámite. Sirve para localizar los que no han empezado a tramitarse.",
             )
 
+            juzgado = st.multiselect("Juzgado / órgano", juzgados)
             procedimiento = st.multiselect("Procedimiento", procedimientos)
             fase = st.multiselect("Fase procesal", fases)
             materia = st.multiselect("Materia", materias)
@@ -230,6 +290,9 @@ with tab_actuales:
         elif filtro_anio_ultimo_tramite:
             filtrado = filtrado[filtrado["Año Últ. Trámite"].isin(filtro_anio_ultimo_tramite)]
 
+        if juzgado:
+            filtrado = filtrado[filtrado["Juzgado"].isin(juzgado)]
+
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
         if fase:
@@ -244,13 +307,50 @@ with tab_actuales:
 
         filtrado = filtrar_por_texto(filtrado, texto_general)
 
-        st.write(f"Mostrando {len(filtrado)} de {len(df)} expedientes.")
+        st.subheader("Carga por juzgado del filtro aplicado")
+
+        if filtrado.empty:
+            st.info("No hay expedientes para los filtros seleccionados.")
+        else:
+            resumen_juzgado = (
+                filtrado.groupby("Juzgado", dropna=False)
+                .size()
+                .reset_index(name="Expedientes")
+                .sort_values("Expedientes", ascending=False)
+            )
+            total_filtrado = int(resumen_juzgado["Expedientes"].sum())
+            resumen_juzgado["%"] = (
+                resumen_juzgado["Expedientes"] / total_filtrado * 100
+            ).round(1)
+
+            cols_juzgados = st.columns(min(len(resumen_juzgado), 4))
+
+            for idx, row in resumen_juzgado.head(4).reset_index(drop=True).iterrows():
+                with cols_juzgados[idx]:
+                    st.metric(
+                        label=str(row["Juzgado"]),
+                        value=int(row["Expedientes"]),
+                        delta=f'{row["%"]}% del filtro',
+                    )
+
+            if len(resumen_juzgado) > 4:
+                st.caption(f"Hay {len(resumen_juzgado)} juzgados en total. La tabla inferior muestra todos.")
+
+            with st.expander("Ver tabla completa de carga por juzgado", expanded=True):
+                st.dataframe(
+                    resumen_juzgado,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df)} totales.")
 
         columnas_visibles = [
             "⭐",
             "Nº Proced.",
             "Año",
             "F. Aceptación",
+            "Juzgado",
             "Procedimiento",
             "Materia",
             "Fase Procesal",
@@ -302,6 +402,7 @@ with tab_modificados:
                     [
                         "⭐",
                         "Nº Proced.",
+                        "Juzgado",
                         "Procedimiento",
                         "Materia",
                         "Fase Procesal",
@@ -348,6 +449,7 @@ with tab_detalle:
 
         with col1:
             st.markdown(f"### {detalle.get('numero_procedimiento', '')}")
+            st.write(f"**Juzgado:** {detalle.get('juzgado', '')}")
             st.write(f"**Procedimiento:** {detalle.get('procedimiento', '')}")
             st.write(f"**Materia:** {detalle.get('materia', '')}")
             st.write(f"**Fase procesal:** {detalle.get('fase_procesal', '')}")

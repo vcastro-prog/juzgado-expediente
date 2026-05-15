@@ -1,5 +1,4 @@
 import re
-from datetime import datetime
 from typing import List, Dict, Optional
 
 import pdfplumber
@@ -66,6 +65,42 @@ def extraer_texto(pdf_file) -> str:
     return "\n".join(paginas)
 
 
+def extraer_juzgado(texto: str) -> str:
+    """
+    Intenta extraer el órgano/juzgado desde el encabezado del PDF.
+    En los PDFs de ALARDE suele aparecer una línea similar a:
+    "Plaza Nº 1 del Tribunal de Instancia (Sección Civil)".
+    """
+    candidatos = []
+
+    for linea in texto.splitlines():
+        limpia = limpiar_texto(linea)
+
+        if not limpia:
+            continue
+
+        if "Página:" in limpia:
+            limpia = limpia.split("Página:")[0].strip()
+
+        if (
+            "Plaza Nº" in limpia
+            or "Plaza No" in limpia
+            or "Juzgado" in limpia
+            or "Tribunal de Instancia" in limpia
+            or "Sección" in limpia
+            or "Seccion" in limpia
+        ):
+            if len(limpia) > 5 and not EXPEDIENTE_RE.match(limpia):
+                candidatos.append(limpia)
+
+    if candidatos:
+        # Preferimos la línea más descriptiva.
+        candidatos = sorted(candidatos, key=len, reverse=True)
+        return candidatos[0]
+
+    return "Sin juzgado detectado"
+
+
 def dividir_en_bloques(texto: str) -> List[str]:
     bloques = []
     actual = []
@@ -124,8 +159,6 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
             "texto_original": bloque,
         }
 
-    # En el PDF suele haber una fecha de aceptación y, al final o cerca del final,
-    # la fecha del último trámite.
     fecha_aceptacion = fechas[0].group(0)
     fecha_ultimo = fechas[-1].group(0) if len(fechas) > 1 else ""
 
@@ -141,20 +174,14 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
 
     fase = detectar_fase(cuerpo) or ""
 
-    materia = ""
-    ultimo_tramite = cuerpo
-    procedimiento = ""
-
     if fase:
         partes = re.split(re.escape(fase), cuerpo, maxsplit=1, flags=re.IGNORECASE)
         materia = quitar_duplicados_espacios(partes[0])
         ultimo_tramite = quitar_duplicados_espacios(partes[1] if len(partes) > 1 else "")
     else:
-        # Fallback: si no detecta fase, conserva el texto.
         materia = ""
         ultimo_tramite = quitar_duplicados_espacios(cuerpo)
 
-    # El procedimiento puede venir antes de la fecha o en la cola del registro.
     procedimiento = quitar_duplicados_espacios(antes_fecha or cola)
     if not procedimiento and cola:
         procedimiento = quitar_duplicados_espacios(cola)
@@ -173,12 +200,14 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
 
 def extraer_expedientes(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
+    juzgado = extraer_juzgado(texto)
     bloques = dividir_en_bloques(texto)
     registros = []
 
     for bloque in bloques:
         reg = parsear_bloque(bloque)
         if reg and reg.get("numero_procedimiento"):
+            reg["juzgado"] = juzgado
             reg["clave_expediente"] = crear_clave(reg)
             registros.append(reg)
 
@@ -186,8 +215,9 @@ def extraer_expedientes(pdf_file) -> List[Dict]:
 
 
 def crear_clave(reg: Dict) -> str:
-    # Hay expedientes con el mismo número en procedimientos distintos.
+    # Incluimos juzgado porque varios órganos pueden tener el mismo número de procedimiento.
     partes = [
+        reg.get("juzgado", ""),
         reg.get("numero_procedimiento", ""),
         reg.get("fecha_aceptacion", ""),
         reg.get("procedimiento", ""),

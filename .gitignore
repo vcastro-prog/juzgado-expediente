@@ -1,5 +1,20 @@
+# Datos y archivos sensibles
 data/
-*.pdf
 *.sqlite
+*.db
+*.pdf
 *.xlsx
+*.xls
+
+# Secretos de Streamlit
+.streamlit/secrets.toml
+
+# Python
 __pycache__/
+*.pyc
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
