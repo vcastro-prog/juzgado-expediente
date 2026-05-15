@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 import pandas as pd
 
@@ -27,6 +27,11 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     inicializar(conn)
     return conn
+
+
+def columna_existe(conn, tabla: str, columna: str) -> bool:
+    columnas = conn.execute(f"PRAGMA table_info({tabla})").fetchall()
+    return any(c["name"] == columna for c in columnas)
 
 
 def inicializar(conn):
@@ -74,6 +79,13 @@ def inicializar(conn):
         )
         """
     )
+
+    if not columna_existe(conn, "expedientes", "favorito"):
+        conn.execute("ALTER TABLE expedientes ADD COLUMN favorito INTEGER DEFAULT 0")
+
+    if not columna_existe(conn, "expedientes", "nota"):
+        conn.execute("ALTER TABLE expedientes ADD COLUMN nota TEXT DEFAULT ''")
+
     conn.commit()
 
 
@@ -103,9 +115,10 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                     INSERT INTO expedientes (
                         clave_expediente, numero_procedimiento, fecha_aceptacion,
                         materia, fase_procesal, ultimo_tramite, fecha_ultimo_tramite,
-                        procedimiento, texto_original, primera_importacion, ultima_importacion
+                        procedimiento, texto_original, primera_importacion, ultima_importacion,
+                        favorito, nota
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
                     """,
                     (
                         clave,
@@ -218,10 +231,11 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
 
 def cargar_expedientes() -> pd.DataFrame:
     with get_conn() as conn:
-        return pd.read_sql_query(
+        df = pd.read_sql_query(
             """
             SELECT
                 numero_procedimiento AS 'Nº Proced.',
+                substr(numero_procedimiento, 9, 4) AS 'Año',
                 fecha_aceptacion AS 'F. Aceptación',
                 procedimiento AS 'Procedimiento',
                 materia AS 'Materia',
@@ -230,12 +244,23 @@ def cargar_expedientes() -> pd.DataFrame:
                 fecha_ultimo_tramite AS 'Fecha Últ. Trámite',
                 primera_importacion AS 'Primera importación',
                 ultima_importacion AS 'Última importación',
+                favorito AS 'Favorito',
+                nota AS 'Nota',
+                CASE
+                    WHEN lower(fase_procesal) LIKE '%archivo%'
+                      OR lower(ultimo_tramite) LIKE '%archivo%'
+                      OR lower(ultimo_tramite) LIKE '%terminación%'
+                      OR lower(ultimo_tramite) LIKE '%terminacion%'
+                    THEN 1
+                    ELSE 0
+                END AS 'Archivado detectado',
                 clave_expediente
             FROM expedientes
             ORDER BY numero_procedimiento
             """,
             conn,
         )
+    return df
 
 
 def cargar_cambios() -> pd.DataFrame:
@@ -271,6 +296,48 @@ def cargar_importaciones() -> pd.DataFrame:
             """,
             conn,
         )
+
+
+def cargar_detalle_expediente(clave_expediente: str) -> Tuple[Dict, pd.DataFrame]:
+    with get_conn() as conn:
+        fila = conn.execute(
+            "SELECT * FROM expedientes WHERE clave_expediente = ?",
+            (clave_expediente,),
+        ).fetchone()
+
+        detalle = dict(fila) if fila else {}
+
+        cambios = pd.read_sql_query(
+            """
+            SELECT
+                fecha_cambio AS 'Fecha cambio',
+                numero_procedimiento AS 'Nº Proced.',
+                campo AS 'Campo',
+                valor_anterior AS 'Valor anterior',
+                valor_nuevo AS 'Valor nuevo',
+                clave_expediente
+            FROM historico_cambios
+            WHERE clave_expediente = ?
+            ORDER BY id DESC
+            """,
+            conn,
+            params=(clave_expediente,),
+        )
+
+    return detalle, cambios
+
+
+def guardar_favorito_nota(clave_expediente: str, favorito: bool, nota: str):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE expedientes
+            SET favorito = ?, nota = ?
+            WHERE clave_expediente = ?
+            """,
+            (1 if favorito else 0, nota or "", clave_expediente),
+        )
+        conn.commit()
 
 
 def resetear_base():

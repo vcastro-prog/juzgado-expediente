@@ -1,5 +1,5 @@
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -10,18 +10,20 @@ from database import (
     cargar_expedientes,
     cargar_cambios,
     cargar_importaciones,
+    cargar_detalle_expediente,
+    guardar_favorito_nota,
     resetear_base,
 )
 
 
 st.set_page_config(
-    page_title="Control de expedientes",
+    page_title="Control de expedientes V2",
     page_icon="⚖️",
     layout="wide",
 )
 
 st.title("⚖️ Control de procedimientos del juzgado")
-st.caption("Sube uno o varios PDFs, actualiza expedientes y revisa los cambios detectados.")
+st.caption("Versión 2: subida múltiple, filtros avanzados, favoritos, notas, detalle de expediente y cambios recientes.")
 
 
 def descargar_excel(df_dict):
@@ -30,6 +32,41 @@ def descargar_excel(df_dict):
         for nombre, df in df_dict.items():
             df.to_excel(writer, index=False, sheet_name=nombre[:31])
     return output.getvalue()
+
+
+def normalizar_texto(valor):
+    return str(valor or "").lower().strip()
+
+
+def filtrar_por_texto(df, texto):
+    if not texto:
+        return df
+    patron = texto.lower().strip()
+    mascara = df.apply(
+        lambda row: patron in " ".join(row.astype(str)).lower(),
+        axis=1,
+    )
+    return df[mascara]
+
+
+def filtrar_por_fecha_cambio(df_cambios, dias):
+    if df_cambios.empty or dias == "Todos":
+        return df_cambios
+
+    ahora = datetime.now()
+    if dias == "Hoy":
+        limite = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif dias == "Últimos 7 días":
+        limite = ahora - timedelta(days=7)
+    elif dias == "Últimos 30 días":
+        limite = ahora - timedelta(days=30)
+    else:
+        return df_cambios
+
+    tmp = df_cambios.copy()
+    tmp["_fecha"] = pd.to_datetime(tmp["Fecha cambio"], errors="coerce")
+    tmp = tmp[tmp["_fecha"] >= limite]
+    return tmp.drop(columns=["_fecha"])
 
 
 with st.sidebar:
@@ -93,29 +130,37 @@ with st.sidebar:
 
     st.divider()
     st.warning("Zona de mantenimiento")
-
     confirmar = st.checkbox("Confirmo que quiero borrar la base local")
     if confirmar and st.button("Borrar base de datos"):
         resetear_base()
-        st.success("Base reiniciada.")
+        st.success("Base reiniciada. Recarga la página si no ves los cambios.")
 
 
 df = cargar_expedientes()
 df_cambios = cargar_cambios()
 df_importaciones = cargar_importaciones()
 
-metricas = st.columns(4)
-metricas[0].metric("Expedientes actuales", len(df))
-metricas[1].metric("Cambios históricos", len(df_cambios))
-metricas[2].metric("Importaciones", len(df_importaciones))
-metricas[3].metric(
+metricas = st.columns(5)
+metricas[0].metric("Expedientes", len(df))
+metricas[1].metric("Favoritos", int(df["Favorito"].sum()) if not df.empty and "Favorito" in df else 0)
+metricas[2].metric("Cambios históricos", len(df_cambios))
+metricas[3].metric("Importaciones", len(df_importaciones))
+metricas[4].metric(
     "Última importación",
     df_importaciones["Fecha importación"].iloc[0] if len(df_importaciones) else "Sin datos",
 )
 
-tab_actuales, tab_cambios, tab_importaciones, tab_exportar = st.tabs(
-    ["Expedientes actuales", "Cambios", "Importaciones", "Exportar"]
+tab_actuales, tab_modificados, tab_detalle, tab_cambios, tab_importaciones, tab_exportar = st.tabs(
+    [
+        "Expedientes actuales",
+        "Modificados recientes",
+        "Detalle expediente",
+        "Histórico cambios",
+        "Importaciones",
+        "Exportar",
+    ]
 )
+
 
 with tab_actuales:
     st.subheader("Expedientes actuales")
@@ -123,67 +168,223 @@ with tab_actuales:
     if df.empty:
         st.info("Aún no hay expedientes. Sube uno o varios PDFs desde la barra lateral.")
     else:
-        col1, col2, col3 = st.columns(3)
+        with st.expander("Filtros avanzados", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
 
-        procedimientos = sorted([x for x in df["Procedimiento"].dropna().unique() if x])
-        fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
-        materias = sorted([x for x in df["Materia"].dropna().unique() if x])
+            procedimientos = sorted([x for x in df["Procedimiento"].dropna().unique() if x])
+            fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
+            materias = sorted([x for x in df["Materia"].dropna().unique() if x])
+            anios = sorted([x for x in df["Año"].dropna().unique() if x])
 
-        procedimiento = col1.multiselect("Procedimiento", procedimientos)
-        fase = col2.multiselect("Fase procesal", fases)
-        materia = col3.multiselect("Materia", materias)
+            filtro_numero = col1.text_input("Nº procedimiento exacto o parcial")
+            filtro_anio = col2.multiselect("Año", anios)
+            filtro_favoritos = col3.checkbox("Solo favoritos")
+            filtro_archivados = col4.selectbox(
+                "Estado",
+                ["Todos", "Excluir archivados", "Solo archivados"],
+            )
 
-        texto = st.text_input("Buscar por nº, trámite, materia o procedimiento")
+            procedimiento = st.multiselect("Procedimiento", procedimientos)
+            fase = st.multiselect("Fase procesal", fases)
+            materia = st.multiselect("Materia", materias)
+
+            col5, col6 = st.columns(2)
+            tramite_contiene = col5.text_input("Último trámite contiene")
+            texto_general = col6.text_input("Búsqueda general")
 
         filtrado = df.copy()
 
+        if filtro_numero:
+            filtrado = filtrado[
+                filtrado["Nº Proced."].astype(str).str.contains(filtro_numero, case=False, na=False)
+            ]
+
+        if filtro_anio:
+            filtrado = filtrado[filtrado["Año"].isin(filtro_anio)]
+
+        if filtro_favoritos:
+            filtrado = filtrado[filtrado["Favorito"] == 1]
+
+        if filtro_archivados == "Excluir archivados":
+            filtrado = filtrado[filtrado["Archivado detectado"] == 0]
+        elif filtro_archivados == "Solo archivados":
+            filtrado = filtrado[filtrado["Archivado detectado"] == 1]
+
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
-
         if fase:
             filtrado = filtrado[filtrado["Fase Procesal"].isin(fase)]
-
         if materia:
             filtrado = filtrado[filtrado["Materia"].isin(materia)]
 
-        if texto:
-            patron = texto.lower()
-            mascara = filtrado.apply(
-                lambda row: patron in " ".join(row.astype(str)).lower(),
-                axis=1,
-            )
-            filtrado = filtrado[mascara]
+        if tramite_contiene:
+            filtrado = filtrado[
+                filtrado["Último trámite"].astype(str).str.contains(tramite_contiene, case=False, na=False)
+            ]
+
+        filtrado = filtrar_por_texto(filtrado, texto_general)
 
         st.write(f"Mostrando {len(filtrado)} de {len(df)} expedientes.")
 
+        columnas_visibles = [
+            "⭐",
+            "Nº Proced.",
+            "Año",
+            "F. Aceptación",
+            "Procedimiento",
+            "Materia",
+            "Fase Procesal",
+            "Último trámite",
+            "Fecha Últ. Trámite",
+            "Nota",
+            "Última importación",
+        ]
+
+        tabla = filtrado.copy()
+        tabla["⭐"] = tabla["Favorito"].apply(lambda x: "⭐" if x else "")
+
         st.dataframe(
-            filtrado.drop(columns=["clave_expediente"], errors="ignore"),
+            tabla[[c for c in columnas_visibles if c in tabla.columns]],
             use_container_width=True,
-            height=600,
+            height=650,
         )
 
 
-with tab_cambios:
-    st.subheader("Histórico de cambios")
+with tab_modificados:
+    st.subheader("Expedientes modificados recientemente")
 
     if df_cambios.empty:
         st.info("Aún no hay cambios registrados.")
     else:
-        texto_cambio = st.text_input("Buscar en cambios")
+        rango = st.radio(
+            "Rango",
+            ["Hoy", "Últimos 7 días", "Últimos 30 días", "Todos"],
+            horizontal=True,
+        )
+
+        cambios_rango = filtrar_por_fecha_cambio(df_cambios, rango)
+
+        if cambios_rango.empty:
+            st.info("No hay cambios para el rango seleccionado.")
+        else:
+            expedientes_modificados = cambios_rango["clave_expediente"].dropna().unique().tolist()
+            modificados = df[df["clave_expediente"].isin(expedientes_modificados)].copy()
+
+            st.metric("Expedientes modificados", len(modificados))
+
+            tabla = modificados.copy()
+            tabla["⭐"] = tabla["Favorito"].apply(lambda x: "⭐" if x else "")
+
+            st.dataframe(
+                tabla[
+                    [
+                        "⭐",
+                        "Nº Proced.",
+                        "Procedimiento",
+                        "Materia",
+                        "Fase Procesal",
+                        "Último trámite",
+                        "Fecha Últ. Trámite",
+                        "Nota",
+                    ]
+                ],
+                use_container_width=True,
+                height=450,
+            )
+
+            st.subheader("Cambios del rango")
+            st.dataframe(
+                cambios_rango.drop(columns=["clave_expediente"], errors="ignore"),
+                use_container_width=True,
+                height=350,
+            )
+
+
+with tab_detalle:
+    st.subheader("Detalle de un expediente")
+
+    if df.empty:
+        st.info("Aún no hay expedientes.")
+    else:
+        opciones = (
+            df["Nº Proced."].astype(str)
+            + " | "
+            + df["Procedimiento"].astype(str)
+            + " | "
+            + df["F. Aceptación"].astype(str)
+        ).tolist()
+
+        indice = st.selectbox("Selecciona expediente", range(len(opciones)), format_func=lambda i: opciones[i])
+        seleccionado = df.iloc[indice]
+        clave = seleccionado["clave_expediente"]
+
+        detalle, cambios_detalle = cargar_detalle_expediente(clave)
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.markdown(f"### {detalle.get('numero_procedimiento', '')}")
+            st.write(f"**Procedimiento:** {detalle.get('procedimiento', '')}")
+            st.write(f"**Materia:** {detalle.get('materia', '')}")
+            st.write(f"**Fase procesal:** {detalle.get('fase_procesal', '')}")
+            st.write(f"**Último trámite:** {detalle.get('ultimo_tramite', '')}")
+            st.write(f"**Fecha último trámite:** {detalle.get('fecha_ultimo_tramite', '')}")
+            st.write(f"**Primera importación:** {detalle.get('primera_importacion', '')}")
+            st.write(f"**Última importación:** {detalle.get('ultima_importacion', '')}")
+
+        with col2:
+            favorito = st.checkbox(
+                "Marcar como favorito",
+                value=bool(detalle.get("favorito", 0)),
+            )
+            nota = st.text_area(
+                "Nota interna",
+                value=detalle.get("nota", "") or "",
+                height=160,
+            )
+
+            if st.button("Guardar favorito/nota"):
+                guardar_favorito_nota(clave, favorito, nota)
+                st.success("Guardado. Recarga o cambia de pestaña para ver la tabla actualizada.")
+
+        st.subheader("Histórico de este expediente")
+        if cambios_detalle.empty:
+            st.info("Este expediente todavía no tiene cambios históricos.")
+        else:
+            st.dataframe(
+                cambios_detalle.drop(columns=["clave_expediente"], errors="ignore"),
+                use_container_width=True,
+                height=400,
+            )
+
+        with st.expander("Texto original extraído del PDF"):
+            st.write(detalle.get("texto_original", ""))
+
+
+with tab_cambios:
+    st.subheader("Histórico completo de cambios")
+
+    if df_cambios.empty:
+        st.info("Aún no hay cambios registrados.")
+    else:
+        col1, col2 = st.columns(2)
+        texto_cambio = col1.text_input("Buscar en cambios")
+        campo = col2.multiselect(
+            "Campo cambiado",
+            sorted([x for x in df_cambios["Campo"].dropna().unique() if x]),
+        )
+
         filtrado_cambios = df_cambios.copy()
 
-        if texto_cambio:
-            patron = texto_cambio.lower()
-            mascara = filtrado_cambios.apply(
-                lambda row: patron in " ".join(row.astype(str)).lower(),
-                axis=1,
-            )
-            filtrado_cambios = filtrado_cambios[mascara]
+        if campo:
+            filtrado_cambios = filtrado_cambios[filtrado_cambios["Campo"].isin(campo)]
+
+        filtrado_cambios = filtrar_por_texto(filtrado_cambios, texto_cambio)
 
         st.dataframe(
             filtrado_cambios.drop(columns=["clave_expediente"], errors="ignore"),
             use_container_width=True,
-            height=600,
+            height=650,
         )
 
 
