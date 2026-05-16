@@ -1,5 +1,6 @@
 from io import BytesIO
 from datetime import datetime, timedelta
+import shutil
 
 import pandas as pd
 import streamlit as st
@@ -57,6 +58,7 @@ if not st.session_state.autenticado:
 
 from parser_pdf import extraer_expedientes, PDFConVariosJuzgadosError
 from database import (
+    DB_PATH,
     guardar_importacion,
     cargar_expedientes,
     cargar_cambios,
@@ -83,6 +85,19 @@ def descargar_excel(df_dict):
         for nombre, df in df_dict.items():
             df.to_excel(writer, index=False, sheet_name=nombre[:31])
     return output.getvalue()
+
+
+
+def leer_backup_sqlite():
+    if DB_PATH.exists():
+        return DB_PATH.read_bytes()
+    return None
+
+
+def restaurar_backup_sqlite(archivo_subido):
+    DB_PATH.parent.mkdir(exist_ok=True)
+    with open(DB_PATH, "wb") as f:
+        f.write(archivo_subido.getbuffer())
 
 
 def normalizar_texto(valor):
@@ -204,6 +219,29 @@ with st.sidebar:
 
     st.divider()
     st.warning("Zona de mantenimiento")
+
+    backup = leer_backup_sqlite()
+    if backup:
+        st.download_button(
+            "Descargar copia SQLite",
+            data=backup,
+            file_name="expedientes_backup.sqlite",
+            mime="application/octet-stream",
+        )
+    else:
+        st.caption("Aún no hay base SQLite para descargar.")
+
+    backup_subido = st.file_uploader(
+        "Restaurar copia SQLite",
+        type=["sqlite", "db"],
+        help="Sube un archivo de copia expedientes_backup.sqlite para restaurar la base.",
+    )
+
+    if backup_subido is not None:
+        if st.button("Restaurar copia SQLite"):
+            restaurar_backup_sqlite(backup_subido)
+            st.success("Copia restaurada. Recarga la página para ver los datos.")
+
     confirmar = st.checkbox("Confirmo que quiero borrar la base local")
     if confirmar and st.button("Borrar base de datos"):
         resetear_base()
@@ -213,6 +251,9 @@ with st.sidebar:
 df = cargar_expedientes()
 df_cambios = cargar_cambios()
 df_importaciones = cargar_importaciones()
+
+if "filtro_juzgado_click" not in st.session_state:
+    st.session_state.filtro_juzgado_click = ""
 
 with st.sidebar:
     st.divider()
@@ -285,6 +326,15 @@ with tab_actuales:
             fase = st.multiselect("Fase procesal", fases)
             materia = st.multiselect("Materia", materias)
 
+            if st.session_state.filtro_juzgado_click:
+                st.info(
+                    "Filtro rápido activo: "
+                    + st.session_state.filtro_juzgado_click
+                )
+                if st.button("Quitar filtro rápido de juzgado"):
+                    st.session_state.filtro_juzgado_click = ""
+                    st.rerun()
+
             col5, col6 = st.columns(2)
             tramite_contiene = col5.text_input("Último trámite contiene")
             texto_general = col6.text_input("Búsqueda general")
@@ -314,6 +364,11 @@ with tab_actuales:
             ]
         elif filtro_anio_ultimo_tramite:
             filtrado = filtrado[filtrado["Año Últ. Trámite"].isin(filtro_anio_ultimo_tramite)]
+
+        if st.session_state.filtro_juzgado_click:
+            filtrado = filtrado[
+                filtrado["Órgano completo"].astype(str) == st.session_state.filtro_juzgado_click
+            ]
 
         if juzgado:
             filtrado = filtrado[filtrado["Juzgado"].isin(juzgado)]
@@ -360,19 +415,28 @@ with tab_actuales:
                 resumen_juzgado["Expedientes"] / total_filtrado * 100
             ).round(1)
 
-            # Mostramos TODOS los juzgados, no solo los cuatro mayores.
+            # Mostramos TODOS los juzgados y permitimos pulsar para filtrar.
             resumen_cards = resumen_juzgado.reset_index(drop=True)
 
             for inicio in range(0, len(resumen_cards), 4):
                 cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
 
                 for pos, (_, row) in enumerate(resumen_cards.iloc[inicio:inicio + 4].iterrows()):
+                    organo = str(row["Órgano completo"])
+                    etiqueta = "Juzgado " + str(row["Nº Juzgado"] or "sin nº")
                     with cols_juzgados[pos]:
                         st.metric(
-                            label="Juzgado " + str(row["Nº Juzgado"] or "sin nº"),
+                            label=etiqueta,
                             value=int(row["Expedientes"]),
                             delta=f'{row["%"]}% del filtro',
                         )
+                        if st.button(
+                            "Filtrar",
+                            key="btn_filtrar_juzgado_" + str(inicio) + "_" + str(pos),
+                            help="Mostrar solo expedientes de " + organo,
+                        ):
+                            st.session_state.filtro_juzgado_click = organo
+                            st.rerun()
 
             st.dataframe(
                 resumen_juzgado,
