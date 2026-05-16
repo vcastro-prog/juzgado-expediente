@@ -94,6 +94,22 @@ def leer_backup_sqlite():
     return None
 
 
+def nombre_backup_sqlite():
+    return "expedientes_backup_" + datetime.now().strftime("%Y%m%d_%H%M") + ".sqlite"
+
+
+def info_backup_sqlite():
+    if not DB_PATH.exists():
+        return None
+
+    stat = DB_PATH.stat()
+    return {
+        "ruta": str(DB_PATH),
+        "tamano_mb": round(stat.st_size / (1024 * 1024), 2),
+        "modificado": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def restaurar_backup_sqlite(archivo_subido):
     DB_PATH.parent.mkdir(exist_ok=True)
     with open(DB_PATH, "wb") as f:
@@ -217,31 +233,53 @@ with st.sidebar:
                     use_container_width=True,
                 )
 
-    st.divider()
-    st.warning("Zona de mantenimiento")
+            st.warning(
+                "Importación terminada. Descarga ahora una copia SQLite desde "
+                "la sección 'Backup / Restauración' de la barra lateral. "
+                "Así no tendrás que volver a cargar PDFs antiguos si Streamlit reinicia la app."
+            )
 
+    st.divider()
+    st.header("Backup / Restauración")
+    st.caption(
+        "Guarda una copia después de cada importación. "
+        "Si Streamlit pierde la base local, restaura este archivo y no tendrás que volver a subir PDFs antiguos."
+    )
+
+    info_backup = info_backup_sqlite()
     backup = leer_backup_sqlite()
-    if backup:
+
+    if info_backup:
+        st.success("Base local disponible")
+        st.caption(f"Última modificación: {info_backup['modificado']}")
+        st.caption(f"Tamaño: {info_backup['tamano_mb']} MB")
+
         st.download_button(
             "Descargar copia SQLite",
             data=backup,
-            file_name="expedientes_backup.sqlite",
+            file_name=nombre_backup_sqlite(),
             mime="application/octet-stream",
+            help="Guarda este archivo en tu PC, NAS o nube privada.",
         )
     else:
-        st.caption("Aún no hay base SQLite para descargar.")
+        st.info("Aún no hay base SQLite para descargar.")
 
     backup_subido = st.file_uploader(
         "Restaurar copia SQLite",
         type=["sqlite", "db"],
-        help="Sube un archivo de copia expedientes_backup.sqlite para restaurar la base.",
+        help="Sube una copia SQLite previamente descargada.",
     )
 
     if backup_subido is not None:
-        if st.button("Restaurar copia SQLite"):
+        st.warning(
+            "Restaurar una copia sustituirá la base local actual por el archivo subido."
+        )
+        if st.button("Restaurar copia SQLite", type="primary"):
             restaurar_backup_sqlite(backup_subido)
             st.success("Copia restaurada. Recarga la página para ver los datos.")
 
+    st.divider()
+    st.warning("Zona de mantenimiento")
     confirmar = st.checkbox("Confirmo que quiero borrar la base local")
     if confirmar and st.button("Borrar base de datos"):
         resetear_base()
@@ -657,6 +695,6 @@ with tab_exportar:
     )
 
     st.info(
-        "Recomendación: descarga periódicamente este Excel como copia de seguridad, "
-        "especialmente si ejecutas la app en Streamlit Community Cloud."
+        "El Excel es útil para consultar y compartir datos, pero la copia completa recomendada "
+        "es el backup SQLite de la barra lateral, porque conserva expedientes, históricos, favoritos y notas."
     )
