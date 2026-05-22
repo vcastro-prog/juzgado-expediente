@@ -428,6 +428,8 @@ if "df_exportar_filtrado" not in st.session_state:
     st.session_state.df_exportar_filtrado = pd.DataFrame()
 if "descripcion_exportacion" not in st.session_state:
     st.session_state.descripcion_exportacion = "Sin filtros aplicados"
+if "columnas_exportar_visibles" not in st.session_state:
+    st.session_state.columnas_exportar_visibles = []
 
 with st.sidebar:
     st.divider()
@@ -628,11 +630,9 @@ with tab_actuales:
 
         st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df)} totales.")
 
-        # Guardamos la vista filtrada actual para que la pestaña Exportar descargue exactamente estos datos.
-        st.session_state.df_exportar_filtrado = filtrado.copy()
-        st.session_state.descripcion_exportacion = f"Exportación filtrada: {len(filtrado)} de {len(df)} expedientes"
+        # La vista exacta para exportar se guarda después de seleccionar columnas visibles.
 
-        columnas_visibles = [
+        columnas_disponibles = [
             "⭐",
             "Nº Proced.",
             "Año",
@@ -649,14 +649,51 @@ with tab_actuales:
             "Año Últ. Trámite",
             "Estado F. Últ. Trámite",
             "Nota",
+            "Primera importación",
             "Última importación",
         ]
+
+        columnas_por_defecto = [
+            "⭐",
+            "Nº Proced.",
+            "Año",
+            "Nº Juzgado",
+            "Procedimiento",
+            "Materia",
+            "Fase Procesal",
+            "Último trámite",
+            "Fecha Últ. Trámite",
+            "Estado F. Últ. Trámite",
+            "Nota",
+        ]
+
+        st.subheader("Columnas visibles")
+        columnas_visibles = st.multiselect(
+            "Selecciona las columnas que quieres ver y exportar",
+            options=columnas_disponibles,
+            default=[c for c in columnas_por_defecto if c in columnas_disponibles],
+            help="El Excel exportará exactamente estas columnas y los filtros aplicados.",
+        )
+
+        if not columnas_visibles:
+            st.warning("Selecciona al menos una columna para mostrar la tabla.")
+            columnas_visibles = ["Nº Proced."]
 
         tabla = filtrado.copy()
         tabla["⭐"] = tabla["Favorito"].apply(lambda x: "⭐" if x else "")
 
+        columnas_finales = [c for c in columnas_visibles if c in tabla.columns]
+        tabla_visible = tabla[columnas_finales].copy()
+
+        st.session_state.df_exportar_filtrado = tabla_visible.copy()
+        st.session_state.columnas_exportar_visibles = columnas_finales
+        st.session_state.descripcion_exportacion = (
+            f"Exportación filtrada: {len(tabla_visible)} de {len(df)} expedientes. "
+            f"Columnas: {len(columnas_finales)}"
+        )
+
         st.dataframe(
-            tabla[[c for c in columnas_visibles if c in tabla.columns]],
+            tabla_visible,
             use_container_width=True,
             height=650,
         )
@@ -832,8 +869,8 @@ with tab_exportar:
 
     st.info(st.session_state.descripcion_exportacion)
     st.caption(
-        "El Excel descargará los expedientes según los filtros aplicados en la pestaña "
-        "'Expedientes actuales'. Por ejemplo, si filtras por *5, se exportarán solo esos expedientes."
+        "El Excel descargará exactamente la misma vista que aparece en la pestaña "
+        "'Expedientes actuales': mismos filtros y mismas columnas visibles."
     )
 
     incluir_cambios = st.checkbox(
@@ -848,7 +885,7 @@ with tab_exportar:
     )
 
     hojas = {
-        "Expedientes filtrados": df_filtrado_exportar.drop(columns=["clave_expediente"], errors="ignore"),
+        "Vista filtrada": df_filtrado_exportar.drop(columns=["clave_expediente"], errors="ignore"),
     }
 
     if incluir_cambios:
