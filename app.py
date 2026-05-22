@@ -5,6 +5,9 @@ import shutil
 import pandas as pd
 import streamlit as st
 
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
+
 
 # =========================
 # SEGURIDAD / LOGIN
@@ -80,10 +83,86 @@ st.caption("Versión 2: subida múltiple, filtros avanzados, favoritos, notas, d
 
 
 def descargar_excel(df_dict):
+    """
+    Genera un Excel con formato:
+    - primera fila congelada;
+    - filtros activados;
+    - cabecera azul con texto blanco;
+    - filas alternas blanco / azul claro;
+    - bordes suaves;
+    - ancho de columnas ajustado.
+    """
     output = BytesIO()
+
+    color_cabecera = "1F4E78"
+    color_fila_alterna = "DDEBF7"
+    color_blanco = "FFFFFF"
+    color_borde = "BFBFBF"
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for nombre, df in df_dict.items():
-            df.to_excel(writer, index=False, sheet_name=nombre[:31])
+            hoja = nombre[:31]
+            df.to_excel(writer, index=False, sheet_name=hoja)
+
+            ws = writer.book[hoja]
+
+            max_row = ws.max_row
+            max_col = ws.max_column
+
+            if max_row == 0 or max_col == 0:
+                continue
+
+            # Congelar primera fila.
+            ws.freeze_panes = "A2"
+
+            # Activar autofiltro.
+            ws.auto_filter.ref = ws.dimensions
+
+            # Formatos.
+            header_fill = PatternFill("solid", fgColor=color_cabecera)
+            header_font = Font(color="FFFFFF", bold=True)
+            even_fill = PatternFill("solid", fgColor=color_fila_alterna)
+            odd_fill = PatternFill("solid", fgColor=color_blanco)
+            thin_border = Border(
+                left=Side(style="thin", color=color_borde),
+                right=Side(style="thin", color=color_borde),
+                top=Side(style="thin", color=color_borde),
+                bottom=Side(style="thin", color=color_borde),
+            )
+
+            # Cabecera.
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border = thin_border
+
+            # Filas alternas y bordes.
+            for row_idx in range(2, max_row + 1):
+                fill = even_fill if row_idx % 2 == 0 else odd_fill
+                for col_idx in range(1, max_col + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.fill = fill
+                    cell.border = thin_border
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            # Ajuste de columnas con límites razonables.
+            for col_idx in range(1, max_col + 1):
+                col_letter = get_column_letter(col_idx)
+                max_length = 0
+
+                for row_idx in range(1, min(max_row, 500) + 1):
+                    value = ws.cell(row=row_idx, column=col_idx).value
+                    if value is None:
+                        continue
+                    max_length = max(max_length, len(str(value)))
+
+                ancho = min(max(max_length + 2, 10), 45)
+                ws.column_dimensions[col_letter].width = ancho
+
+            # Altura cabecera.
+            ws.row_dimensions[1].height = 24
+
     return output.getvalue()
 
 
@@ -345,6 +424,11 @@ df_importaciones = cargar_importaciones()
 if "filtro_juzgado_click" not in st.session_state:
     st.session_state.filtro_juzgado_click = ""
 
+if "df_exportar_filtrado" not in st.session_state:
+    st.session_state.df_exportar_filtrado = pd.DataFrame()
+if "descripcion_exportacion" not in st.session_state:
+    st.session_state.descripcion_exportacion = "Sin filtros aplicados"
+
 with st.sidebar:
     st.divider()
     st.header("Datos generales")
@@ -373,6 +457,8 @@ with tab_actuales:
     st.subheader("Expedientes actuales")
 
     if df.empty:
+        st.session_state.df_exportar_filtrado = pd.DataFrame()
+        st.session_state.descripcion_exportacion = "Sin expedientes"
         st.info("Aún no hay expedientes. Sube uno o varios PDFs desde la barra lateral.")
     else:
         with st.expander("Filtros avanzados", expanded=True):
@@ -541,6 +627,10 @@ with tab_actuales:
             )
 
         st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df)} totales.")
+
+        # Guardamos la vista filtrada actual para que la pestaña Exportar descargue exactamente estos datos.
+        st.session_state.df_exportar_filtrado = filtrado.copy()
+        st.session_state.descripcion_exportacion = f"Exportación filtrada: {len(filtrado)} de {len(df)} expedientes"
 
         columnas_visibles = [
             "⭐",
@@ -735,18 +825,44 @@ with tab_importaciones:
 with tab_exportar:
     st.subheader("Exportar datos")
 
-    excel = descargar_excel(
-        {
-            "Expedientes actuales": df.drop(columns=["clave_expediente"], errors="ignore"),
-            "Cambios": df_cambios.drop(columns=["clave_expediente"], errors="ignore"),
-            "Importaciones": df_importaciones,
-        }
+    df_filtrado_exportar = st.session_state.df_exportar_filtrado
+
+    if df_filtrado_exportar is None or df_filtrado_exportar.empty:
+        df_filtrado_exportar = df.copy()
+
+    st.info(st.session_state.descripcion_exportacion)
+    st.caption(
+        "El Excel descargará los expedientes según los filtros aplicados en la pestaña "
+        "'Expedientes actuales'. Por ejemplo, si filtras por *5, se exportarán solo esos expedientes."
     )
 
-    nombre = f"expedientes_juzgado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    incluir_cambios = st.checkbox(
+        "Incluir histórico de cambios completo",
+        value=True,
+        help="La hoja principal siempre será la vista filtrada. Esta opción añade el histórico completo como hoja adicional.",
+    )
+
+    incluir_importaciones = st.checkbox(
+        "Incluir importaciones",
+        value=True,
+    )
+
+    hojas = {
+        "Expedientes filtrados": df_filtrado_exportar.drop(columns=["clave_expediente"], errors="ignore"),
+    }
+
+    if incluir_cambios:
+        hojas["Cambios"] = df_cambios.drop(columns=["clave_expediente"], errors="ignore")
+
+    if incluir_importaciones:
+        hojas["Importaciones"] = df_importaciones
+
+    excel = descargar_excel(hojas)
+
+    nombre = f"expedientes_filtrados_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
     st.download_button(
-        "Descargar Excel",
+        "Descargar Excel filtrado",
         data=excel,
         file_name=nombre,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
