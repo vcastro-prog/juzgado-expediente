@@ -39,7 +39,7 @@ if not st.session_state.autenticado:
     )
 
     st.title("🔒 Acceso privado")
-    st.caption("Introduce la contraseña para acceder al control de expedientes-.")
+    st.caption("Introduce la contraseña para acceder al control de expedientes.")
 
     password = st.text_input(
         "Contraseña",
@@ -60,6 +60,7 @@ if not st.session_state.autenticado:
     st.stop()
 
 from parser_pdf import extraer_expedientes, PDFConVariosJuzgadosError
+from version import APP_VERSION, BUILD_DATE, APP_CHANGELOG
 from database import (
     DB_PATH,
     guardar_importacion,
@@ -79,6 +80,8 @@ st.set_page_config(
 )
 
 st.title("⚖️ Control de procedimientos del juzgado")
+st.caption(f"Versión {APP_VERSION} · Build {BUILD_DATE}")
+st.caption(APP_CHANGELOG)
 st.caption("Versión 2: subida múltiple, filtros avanzados, favoritos, notas, detalle de expediente y cambios recientes.")
 
 
@@ -283,6 +286,8 @@ def filtrar_por_fecha_cambio(df_cambios, dias):
 
 
 with st.sidebar:
+    st.caption(f"Versión {APP_VERSION} · {BUILD_DATE}")
+
     if st.button("Cerrar sesión"):
         st.session_state.autenticado = False
         st.rerun()
@@ -487,6 +492,16 @@ with tab_actuales:
                 ["Todos", "Excluir archivados", "Solo archivados"],
             )
 
+            filtro_cambios = st.selectbox(
+                "Cambios recientes",
+                [
+                    "Todos",
+                    "Solo modificados hoy",
+                    "Modificados últimos 7 días",
+                    "Modificados últimos 30 días",
+                ],
+            )
+
             st.caption(
                 "Filtro de nº procedimiento: usa *5, *45 o *345 para buscar expedientes cuyo número termine así. "
                 "Usa *5/2025 para limitar además al año 2025."
@@ -648,6 +663,8 @@ with tab_actuales:
             "Fecha Últ. Trámite",
             "Año Últ. Trámite",
             "Estado F. Últ. Trámite",
+            "Estado cambios",
+            "Último cambio",
             "Nota",
             "Primera importación",
             "Última importación",
@@ -664,6 +681,8 @@ with tab_actuales:
             "Último trámite",
             "Fecha Últ. Trámite",
             "Estado F. Últ. Trámite",
+            "Estado cambios",
+            "Último cambio",
             "Nota",
         ]
 
@@ -691,6 +710,15 @@ with tab_actuales:
             f"Exportación filtrada: {len(tabla_visible)} de {len(df)} expedientes. "
             f"Columnas: {len(columnas_finales)}"
         )
+
+        cambios_detectados = tabla_visible[
+            tabla_visible["Estado cambios"].astype(str).str.contains("Modificado", na=False)
+        ] if "Estado cambios" in tabla_visible.columns else pd.DataFrame()
+
+        if not cambios_detectados.empty:
+            st.success(
+                f"Expedientes modificados detectados: {len(cambios_detectados)}"
+            )
 
         st.dataframe(
             tabla_visible,

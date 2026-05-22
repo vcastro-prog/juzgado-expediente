@@ -305,6 +305,21 @@ def cargar_expedientes() -> pd.DataFrame:
                 END AS 'Estado F. Últ. Trámite',
                 primera_importacion AS 'Primera importación',
                 ultima_importacion AS 'Última importación',
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM historico_cambios hc
+                        WHERE hc.clave_expediente = expedientes.clave_expediente
+                          AND date(hc.fecha_cambio) = date('now')
+                    )
+                    THEN '🟢 Modificado'
+                    ELSE ''
+                END AS 'Estado cambios',
+                (
+                    SELECT max(hc.fecha_cambio)
+                    FROM historico_cambios hc
+                    WHERE hc.clave_expediente = expedientes.clave_expediente
+                ) AS 'Último cambio',
                 favorito AS 'Favorito',
                 nota AS 'Nota',
                 CASE
