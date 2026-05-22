@@ -39,7 +39,7 @@ if not st.session_state.autenticado:
     )
 
     st.title("🔒 Acceso privado")
-    st.caption("Introduce la contraseña para acceder al control de expedientes.")
+    st.caption("Introduce la contraseña para acceder al control de expedientes-.")
 
     password = st.text_input(
         "Contraseña",
