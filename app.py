@@ -81,10 +81,12 @@ st.set_page_config(
 
 st.markdown(
     f"""
-    # ⚖️ Control de procedimientos del juzgado  
-    <span style='font-size:0.95rem;color:gray;'>
-    Versión {APP_VERSION} · Build {BUILD_DATE}
-    </span>
+    <div style="display:flex; align-items:baseline; gap:14px; margin-bottom:0.4rem;">
+        <h1 style="margin:0;">⚖️ Control de procedimientos del juzgado</h1>
+        <span style="font-size:0.95rem; color:gray; white-space:nowrap;">
+            Versión {APP_VERSION} · Build {BUILD_DATE}
+        </span>
+    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -98,6 +100,10 @@ def descargar_excel(df_dict):
     - filtros activados;
     - cabecera azul con texto blanco;
     - filas alternas blanco / azul claro;
+    - colores operativos:
+        · modificados: verde claro;
+        · sin iniciar trámite: amarillo claro;
+        · archivados: gris claro, si aparece una columna que lo indique;
     - bordes suaves;
     - ancho de columnas ajustado.
     """
@@ -107,6 +113,10 @@ def descargar_excel(df_dict):
     color_fila_alterna = "DDEBF7"
     color_blanco = "FFFFFF"
     color_borde = "BFBFBF"
+
+    color_modificado = "C6EFCE"      # verde claro
+    color_sin_tramite = "FFF2CC"     # amarillo claro
+    color_archivado = "E7E6E6"       # gris claro
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for nombre, df in df_dict.items():
@@ -132,6 +142,10 @@ def descargar_excel(df_dict):
             header_font = Font(color="FFFFFF", bold=True)
             even_fill = PatternFill("solid", fgColor=color_fila_alterna)
             odd_fill = PatternFill("solid", fgColor=color_blanco)
+            fill_modificado = PatternFill("solid", fgColor=color_modificado)
+            fill_sin_tramite = PatternFill("solid", fgColor=color_sin_tramite)
+            fill_archivado = PatternFill("solid", fgColor=color_archivado)
+
             thin_border = Border(
                 left=Side(style="thin", color=color_borde),
                 right=Side(style="thin", color=color_borde),
@@ -146,9 +160,44 @@ def descargar_excel(df_dict):
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = thin_border
 
-            # Filas alternas y bordes.
+            # Índices de columnas para colores operativos.
+            headers = {
+                str(ws.cell(row=1, column=col_idx).value): col_idx
+                for col_idx in range(1, max_col + 1)
+            }
+
+            col_estado_cambios = headers.get("Estado cambios")
+            col_estado_tramite = headers.get("Estado F. Últ. Trámite")
+            col_archivado = headers.get("Archivado detectado")
+
+            # Filas alternas, bordes y colores operativos.
             for row_idx in range(2, max_row + 1):
                 fill = even_fill if row_idx % 2 == 0 else odd_fill
+
+                estado_cambios = ""
+                estado_tramite = ""
+                archivado = ""
+
+                if col_estado_cambios:
+                    estado_cambios = str(ws.cell(row=row_idx, column=col_estado_cambios).value or "")
+
+                if col_estado_tramite:
+                    estado_tramite = str(ws.cell(row=row_idx, column=col_estado_tramite).value or "")
+
+                if col_archivado:
+                    archivado = str(ws.cell(row=row_idx, column=col_archivado).value or "")
+
+                # Prioridad de color:
+                # 1. Modificado
+                # 2. Sin iniciar trámite
+                # 3. Archivado
+                if "Modificado" in estado_cambios:
+                    fill = fill_modificado
+                elif "Sin iniciar" in estado_tramite:
+                    fill = fill_sin_tramite
+                elif archivado in ("1", "True", "true", "Sí", "Si"):
+                    fill = fill_archivado
+
                 for col_idx in range(1, max_col + 1):
                     cell = ws.cell(row=row_idx, column=col_idx)
                     cell.fill = fill
@@ -173,8 +222,6 @@ def descargar_excel(df_dict):
             ws.row_dimensions[1].height = 24
 
     return output.getvalue()
-
-
 
 def leer_backup_sqlite():
     if DB_PATH.exists():
