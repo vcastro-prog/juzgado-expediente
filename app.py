@@ -79,10 +79,16 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("⚖️ Control de procedimientos del juzgado")
-st.caption(f"Versión {APP_VERSION} · Build {BUILD_DATE}")
-st.caption(APP_CHANGELOG)
-st.caption("Versión 2: subida múltiple, filtros avanzados, favoritos, notas, detalle de expediente y cambios recientes.")
+st.markdown(
+    f"""
+    # ⚖️ Control de procedimientos del juzgado  
+    <span style='font-size:0.95rem;color:gray;'>
+    Versión {APP_VERSION} · Build {BUILD_DATE}
+    </span>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 
 def descargar_excel(df_dict):
