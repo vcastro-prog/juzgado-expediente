@@ -1,3 +1,3 @@
-APP_VERSION = "v1.9.2"
+APP_VERSION = "v1.9.3"
 BUILD_DATE = "2026-05-21"
-APP_CHANGELOG = "Exportación Excel exacta con colores operativos para expedientes modificados y estados relevantes."
+APP_CHANGELOG = "Tarjetas de carga por juzgado ordenadas por número de juzgado."

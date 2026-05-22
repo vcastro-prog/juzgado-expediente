@@ -687,7 +687,20 @@ with tab_actuales:
             ).round(1)
 
             # Mostramos TODOS los juzgados y permitimos pulsar para filtrar.
-            resumen_cards = resumen_juzgado.reset_index(drop=True)
+            # La tabla mantiene el orden por carga/porcentaje, pero las tarjetas se ordenan por nº de juzgado.
+            resumen_cards = resumen_juzgado.copy()
+
+            resumen_cards["_orden_juzgado"] = pd.to_numeric(
+                resumen_cards["Nº Juzgado"],
+                errors="coerce",
+            )
+
+            resumen_cards = (
+                resumen_cards
+                .sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last")
+                .drop(columns=["_orden_juzgado"])
+                .reset_index(drop=True)
+            )
 
             for inicio in range(0, len(resumen_cards), 4):
                 cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
