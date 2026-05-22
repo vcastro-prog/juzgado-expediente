@@ -131,6 +131,58 @@ def filtrar_por_texto(df, texto):
     return df[mascara]
 
 
+
+def filtrar_por_patron_expediente(df, patron):
+    """
+    Permite filtrar expedientes por terminación del número, sin contar el año.
+
+    Ejemplos:
+    - *5       -> 0000005/2026, 0001235/2024, etc.
+    - *45      -> 0002345/2026, 0000045/2025, etc.
+    - *345     -> 0002345/2026, etc.
+    - *5/2025  -> expedientes cuyo número termina en 5 y año 2025.
+    - 0002345/2026 -> búsqueda parcial normal.
+    """
+    if not patron:
+        return df
+
+    patron = str(patron).strip()
+    if not patron:
+        return df
+
+    if not patron.startswith("*"):
+        return df[df["Nº Proced."].astype(str).str.contains(patron, case=False, na=False)]
+
+    patron_limpio = patron[1:].strip()
+
+    if "/" in patron_limpio:
+        terminacion, anio = patron_limpio.split("/", 1)
+        terminacion = terminacion.strip()
+        anio = anio.strip()
+    else:
+        terminacion = patron_limpio.strip()
+        anio = ""
+
+    def coincide(valor):
+        valor = str(valor or "").strip()
+        if "/" not in valor:
+            return False
+
+        numero, anio_exp = valor.split("/", 1)
+        numero = numero.strip()
+        anio_exp = anio_exp.strip()
+
+        if terminacion and not numero.endswith(terminacion):
+            return False
+
+        if anio and anio_exp != anio:
+            return False
+
+        return True
+
+    return df[df["Nº Proced."].apply(coincide)]
+
+
 def filtrar_por_fecha_cambio(df_cambios, dias):
     if df_cambios.empty or dias == "Todos":
         return df_cambios
@@ -336,12 +388,20 @@ with tab_actuales:
             anios = sorted([x for x in df["Año"].dropna().unique() if x])
             anios_ultimo_tramite = sorted([x for x in df["Año Últ. Trámite"].dropna().unique() if x])
 
-            filtro_numero = col1.text_input("Nº procedimiento exacto o parcial")
+            filtro_numero = col1.text_input(
+                "Nº procedimiento / patrón",
+                help="Ejemplos: 0002345/2026, *5, *45, *345 o *5/2025. El patrón * busca por terminación del número sin contar el año.",
+            )
             filtro_anio = col2.multiselect("Año del procedimiento", anios)
             filtro_favoritos = col3.checkbox("Solo favoritos")
             filtro_archivados = col4.selectbox(
                 "Estado general",
                 ["Todos", "Excluir archivados", "Solo archivados"],
+            )
+
+            st.caption(
+                "Filtro de nº procedimiento: usa *5, *45 o *345 para buscar expedientes cuyo número termine así. "
+                "Usa *5/2025 para limitar además al año 2025."
             )
 
             col_fecha1, col_fecha2 = st.columns(2)
@@ -380,9 +440,7 @@ with tab_actuales:
         filtrado = df.copy()
 
         if filtro_numero:
-            filtrado = filtrado[
-                filtrado["Nº Proced."].astype(str).str.contains(filtro_numero, case=False, na=False)
-            ]
+            filtrado = filtrar_por_patron_expediente(filtrado, filtro_numero)
 
         if filtro_anio:
             filtrado = filtrado[filtrado["Año"].isin(filtro_anio)]
