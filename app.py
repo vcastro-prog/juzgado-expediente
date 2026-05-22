@@ -522,6 +522,15 @@ with tab_actuales:
         st.info("Aún no hay expedientes. Sube uno o varios PDFs desde la barra lateral.")
     else:
         with st.expander("Filtros avanzados", expanded=True):
+
+            col_reset_1, col_reset_2 = st.columns([1, 5])
+
+            with col_reset_1:
+                if st.button("🔄 Resetear filtros"):
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("filtro_"):
+                            del st.session_state[key]
+                    st.rerun()
             col1, col2, col3, col4 = st.columns(4)
 
             juzgados = sorted([x for x in df["Juzgado"].dropna().unique() if x])
@@ -536,13 +545,22 @@ with tab_actuales:
 
             filtro_numero = col1.text_input(
                 "Nº procedimiento / patrón",
+                key="filtro_numero_patron",
                 help="Ejemplos: 0002345/2026, *5, *45, *345 o *5/2025. El patrón * busca por terminación del número sin contar el año.",
             )
-            filtro_anio = col2.multiselect("Año del procedimiento", anios)
-            filtro_favoritos = col3.checkbox("Solo favoritos")
+            filtro_anio = col2.multiselect(
+                "Año del procedimiento",
+                anios,
+                key="filtro_anio_procedimiento",
+            )
+            filtro_favoritos = col3.checkbox(
+                "Solo favoritos",
+                key="filtro_solo_favoritos",
+            )
             filtro_archivados = col4.selectbox(
                 "Estado general",
                 ["Todos", "Excluir archivados", "Solo archivados"],
+                key="filtro_estado_general",
             )
 
             filtro_cambios = st.selectbox(
@@ -553,6 +571,7 @@ with tab_actuales:
                     "Modificados últimos 7 días",
                     "Modificados últimos 30 días",
                 ],
+                key="filtro_cambios_recientes",
             )
 
             st.caption(
