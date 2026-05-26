@@ -421,14 +421,186 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
         "texto_original": bloque,
     }
 
-def extraer_expedientes(pdf_file) -> List[Dict]:
-    texto = extraer_texto(pdf_file)
-    juzgado_info = extraer_juzgado_info(texto)
-    bloques = dividir_en_bloques(texto)
+
+# =========================
+# PARSER POR COORDENADAS PDF
+# =========================
+#
+# Estos PDFs ALARDE son tablas visuales. Cuando una celda ocupa varias líneas,
+# pdfplumber puede extraer el texto en orden extraño si usamos texto corrido.
+# Por eso este parser usa posiciones X/Y para reconstruir cada columna.
+
+COLUMNAS_X = {
+    "numero": (0, 78),
+    "procedimiento": (78, 195),
+    "fecha_aceptacion": (195, 260),
+    "materia": (260, 395),
+    "fase_procesal": (395, 462),
+    "ultimo_tramite": (462, 602),
+    "fecha_ultimo_tramite": (602, 685),
+    "proximo_tramite": (685, 900),
+}
+
+
+def texto_columna(words: List[Dict], x_min: float, x_max: float) -> str:
+    seleccion = [
+        w for w in words
+        if w.get("x0", 0) >= x_min and w.get("x0", 0) < x_max
+    ]
+
+    if not seleccion:
+        return ""
+
+    seleccion = sorted(seleccion, key=lambda w: (round(w["top"], 1), w["x0"]))
+
+    lineas = []
+    actual = []
+    top_actual = None
+
+    for w in seleccion:
+        top = w["top"]
+        if top_actual is None or abs(top - top_actual) <= 3:
+            actual.append(w)
+            if top_actual is None:
+                top_actual = top
+        else:
+            actual = sorted(actual, key=lambda x: x["x0"])
+            lineas.append(" ".join(x["text"] for x in actual))
+            actual = [w]
+            top_actual = top
+
+    if actual:
+        actual = sorted(actual, key=lambda x: x["x0"])
+        lineas.append(" ".join(x["text"] for x in actual))
+
+    return limpiar_campo_pdf(" ".join(lineas))
+
+
+def limpiar_campo_pdf(texto: str) -> str:
+    texto = limpiar_texto(texto)
+    reemplazos = {
+        "Inicio/Demanda a": "Inicio/Demanda",
+        "Inicio/Demand a": "Inicio/Demanda",
+        "Inicio/Demand": "Inicio/Demanda",
+        "Inicio/Solicitu d": "Inicio/Solicitud",
+        "Despacho/Req uerimiento": "Despacho/Requerimiento",
+        "Admisión/Req uerimiento": "Admisión/Requerimiento",
+        "Admisión/Cita ción": "Admisión/Citación",
+        "Oposición/Des p Ejec/Resolució n": "Oposición/Desp Ejec/Resolución",
+        "Ejec/Resolució n": "Ejec/Resolución",
+        "Audiencia Previa": "Audiencia Previa",
+        "Pendiente de resolver": "Pendiente de resolver",
+    }
+    for a, b in reemplazos.items():
+        texto = texto.replace(a, b)
+
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def palabras_pagina(page) -> List[Dict]:
+    return page.extract_words(
+        x_tolerance=1,
+        y_tolerance=3,
+        keep_blank_chars=False,
+        use_text_flow=False,
+    )
+
+
+def extraer_registros_por_coordenadas(pdf_file) -> List[Dict]:
     registros = []
 
-    for bloque in bloques:
-        reg = parsear_bloque(bloque)
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            words = palabras_pagina(page)
+
+            # Zona útil de la tabla. Excluye cabecera y pie.
+            words = [
+                w for w in words
+                if w.get("top", 0) > 120
+                and w.get("top", 0) < 570
+                and not es_linea_ruido(w.get("text", ""))
+            ]
+
+            starts = [
+                idx for idx, w in enumerate(words)
+                if EXPEDIENTE_RE.match(w.get("text", ""))
+                and w.get("x0", 999) < 78
+            ]
+
+            for pos, start_idx in enumerate(starts):
+                end_idx = starts[pos + 1] if pos + 1 < len(starts) else len(words)
+                bloque_words = words[start_idx:end_idx]
+
+                numero = texto_columna(bloque_words, *COLUMNAS_X["numero"])
+                m_num = EXPEDIENTE_RE.search(numero)
+                if not m_num:
+                    continue
+                numero = m_num.group(0)
+
+                procedimiento = texto_columna(bloque_words, *COLUMNAS_X["procedimiento"])
+                fecha_aceptacion = texto_columna(bloque_words, *COLUMNAS_X["fecha_aceptacion"])
+                materia = texto_columna(bloque_words, *COLUMNAS_X["materia"])
+                fase = texto_columna(bloque_words, *COLUMNAS_X["fase_procesal"])
+                ultimo = texto_columna(bloque_words, *COLUMNAS_X["ultimo_tramite"])
+                fecha_ultimo = texto_columna(bloque_words, *COLUMNAS_X["fecha_ultimo_tramite"])
+
+                fechas_aceptacion = FECHA_RE.findall(fecha_aceptacion)
+                fecha_aceptacion = fechas_aceptacion[0] if fechas_aceptacion else ""
+
+                fechas_ultimo = FECHA_RE.findall(fecha_ultimo)
+                fecha_ultimo = fechas_ultimo[-1] if fechas_ultimo else ""
+
+                texto_original = limpiar_campo_pdf(
+                    " ".join(
+                        w.get("text", "")
+                        for w in sorted(bloque_words, key=lambda x: (x["top"], x["x0"]))
+                    )
+                )
+
+                registros.append(
+                    {
+                        "numero_procedimiento": numero,
+                        "fecha_aceptacion": fecha_aceptacion,
+                        "materia": materia,
+                        "fase_procesal": fase,
+                        "ultimo_tramite": ultimo,
+                        "fecha_ultimo_tramite": fecha_ultimo,
+                        "procedimiento": procedimiento,
+                        "texto_original": texto_original,
+                    }
+                )
+
+    return registros
+
+
+def extraer_expedientes(pdf_file) -> List[Dict]:
+    """
+    Extrae expedientes usando parser por coordenadas X/Y.
+
+    Si el PDF no devuelve registros por coordenadas, usa como respaldo
+    el parser textual anterior.
+    """
+    texto = extraer_texto(pdf_file)
+    juzgado_info = extraer_juzgado_info(texto)
+
+    try:
+        registros_base = extraer_registros_por_coordenadas(pdf_file)
+    except Exception:
+        registros_base = []
+
+    if not registros_base:
+        bloques = dividir_en_bloques(texto)
+        registros_base = []
+        for bloque in bloques:
+            reg = parsear_bloque(bloque)
+            if reg and reg.get("numero_procedimiento"):
+                registros_base.append(reg)
+
+    registros = []
+    vistos = set()
+
+    for reg in registros_base:
         if reg and reg.get("numero_procedimiento"):
             reg["juzgado"] = juzgado_info["organo_completo"]
             reg["organo_completo"] = juzgado_info["organo_completo"]
@@ -436,10 +608,13 @@ def extraer_expedientes(pdf_file) -> List[Dict]:
             reg["juzgado_tipo"] = juzgado_info["juzgado_tipo"]
             reg["juzgado_seccion"] = juzgado_info["juzgado_seccion"]
             reg["clave_expediente"] = crear_clave(reg)
-            registros.append(reg)
+
+            clave = reg["clave_expediente"]
+            if clave not in vistos:
+                registros.append(reg)
+                vistos.add(clave)
 
     return registros
-
 
 def crear_clave(reg: Dict) -> str:
     partes = [
