@@ -3,6 +3,19 @@ from typing import List, Dict, Optional
 
 import pdfplumber
 
+def quitar_duplicados_espacios(texto: str) -> str:
+    """
+    Limpia espacios duplicados y normaliza saltos de línea.
+    """
+    if texto is None:
+        return ""
+
+    texto = str(texto)
+    texto = " ".join(texto.split())
+    return texto
+
+
+
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
 FECHA_RE = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
