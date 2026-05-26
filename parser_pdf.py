@@ -211,39 +211,148 @@ def extraer_juzgado_info(texto: str) -> Dict[str, str]:
     return list(grupos.values())[0][0]
 
 
-def dividir_en_bloques(texto: str) -> List[str]:
-    bloques = []
+
+def es_continuacion_de_fila(linea: str) -> bool:
+    """
+    Detecta líneas huérfanas que pertenecen a la fila anterior.
+
+    En los PDFs judiciales muchas celdas aparecen partidas:
+    - procedimiento en dos líneas;
+    - materia en dos líneas;
+    - último trámite en varias líneas.
+
+    Una línea de continuación normalmente:
+    - no empieza por número de expediente;
+    - no es cabecera ni pie;
+    - no es órgano;
+    - no es solo una fecha;
+    - contiene texto útil.
+    """
+    linea = limpiar_texto(linea)
+
+    if not linea:
+        return False
+
+    if EXPEDIENTE_RE.match(linea):
+        return False
+
+    if es_linea_ruido(linea) or es_linea_organo(linea):
+        return False
+
+    # No consideramos continuación una línea formada solo por fecha/página/número.
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", linea):
+        return False
+
+    if re.fullmatch(r"\d+", linea):
+        return False
+
+    return True
+
+
+def unir_fragmentos_texto(partes: List[str]) -> str:
+    """
+    Une fragmentos manteniendo palabras y evitando dobles espacios.
+    También corrige algunos cortes frecuentes.
+    """
+    texto = " ".join(limpiar_texto(p) for p in partes if p and p.strip())
+    texto = quitar_duplicados_espacios(texto)
+
+    # Correcciones genéricas por cortes raros de PDF.
+    texto = texto.replace("  ", " ")
+    texto = texto.replace(" - - ", " - ")
+    texto = re.sub(r"\(\s+", "(", texto)
+    texto = re.sub(r"\s+\)", ")", texto)
+
+    return texto.strip()
+
+
+def reconstruir_lineas_logicas(texto: str) -> List[str]:
+    """
+    Reconstruye filas lógicas del PDF antes de parsearlas.
+
+    Si una línea no empieza por expediente y parece continuación,
+    se añade a la fila anterior.
+
+    Esto mejora de forma general:
+    - procedimiento;
+    - materia;
+    - último trámite;
+    - textos largos partidos por salto de línea.
+    """
+    lineas_logicas = []
     actual = []
 
-    for linea in texto.splitlines():
-        linea = limpiar_texto(linea)
+    for raw in texto.splitlines():
+        linea = limpiar_texto(raw)
+
         if es_linea_ruido(linea) or es_linea_organo(linea):
+            continue
+
+        if not linea:
             continue
 
         if EXPEDIENTE_RE.match(linea):
             if actual:
-                bloques.append(" ".join(actual))
+                lineas_logicas.append(unir_fragmentos_texto(actual))
             actual = [linea]
         else:
-            if actual:
+            if actual and es_continuacion_de_fila(linea):
+                actual.append(linea)
+            elif actual:
+                # Si no parece continuación, aun así la conservamos pegada
+                # para no perder información, salvo que sea ruido.
                 actual.append(linea)
 
     if actual:
-        bloques.append(" ".join(actual))
+        lineas_logicas.append(unir_fragmentos_texto(actual))
 
+    return [l for l in lineas_logicas if l.strip()]
+
+
+def dividir_en_bloques(texto: str) -> List[str]:
+    """
+    Divide el PDF en bloques de expediente, reconstruyendo previamente
+    líneas partidas por el salto visual del PDF.
+    """
+    bloques = reconstruir_lineas_logicas(texto)
     return [limpiar_texto(b) for b in bloques if b.strip()]
 
+def limpiar_procedimiento(texto: str) -> str:
+    texto = quitar_duplicados_espacios(texto)
+    texto = texto.replace("  -  ", " - ")
+    texto = re.sub(r"\s+-\s+", " - ", texto)
+    return quitar_duplicados_espacios(texto)
 
-def detectar_fase(texto: str) -> Optional[str]:
-    normalizado = texto.lower()
+
+def detectar_posicion_fase(texto: str):
+    texto_lower = texto.lower()
+    candidatos = []
+
     for fase in sorted(FASES_CONOCIDAS, key=len, reverse=True):
-        if fase.lower() in normalizado:
-            return fase
-    return None
+        idx = texto_lower.find(fase.lower())
+        if idx >= 0:
+            candidatos.append((idx, idx + len(fase), fase))
+
+    if not candidatos:
+        return "", -1, -1
+
+    candidatos.sort(key=lambda x: x[0])
+    start, end, fase = candidatos[0]
+    return fase, start, end
 
 
-def quitar_duplicados_espacios(texto: str) -> str:
-    return re.sub(r"\s+", " ", texto or "").strip()
+def extraer_procedimiento_y_resto(resto: str, fechas: List[re.Match]):
+    """
+    Extrae procedimiento usando la primera fecha como separador principal.
+
+    Si antes de la fecha aparece un texto partido, ya llega unido desde
+    reconstruir_lineas_logicas().
+    """
+    fecha_aceptacion = fechas[0].group(0)
+    antes_fecha = resto[: fechas[0].start()].strip()
+    despues_fecha = resto[fechas[0].end():].strip()
+
+    return limpiar_procedimiento(antes_fecha), fecha_aceptacion, despues_fecha
 
 
 def parsear_bloque(bloque: str) -> Optional[Dict]:
@@ -257,6 +366,7 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
     resto = bloque[m.end():].strip()
 
     fechas = list(FECHA_RE.finditer(resto))
+
     if not fechas:
         return {
             "numero_procedimiento": numero,
@@ -265,36 +375,40 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
             "fase_procesal": "",
             "ultimo_tramite": resto,
             "fecha_ultimo_tramite": "",
-            "procedimiento": "",
+            "procedimiento": limpiar_procedimiento(resto),
             "texto_original": bloque,
         }
 
-    fecha_aceptacion = fechas[0].group(0)
-    fecha_ultimo = fechas[-1].group(0) if len(fechas) > 1 else ""
+    procedimiento, fecha_aceptacion, despues_fecha = extraer_procedimiento_y_resto(resto, fechas)
 
-    antes_fecha = resto[: fechas[0].start()].strip()
-    despues_fecha = resto[fechas[0].end():].strip()
+    # Recalcular fechas en el texto posterior a la primera fecha.
+    fechas_posteriores = list(FECHA_RE.finditer(despues_fecha))
 
-    if fecha_ultimo:
-        cuerpo = despues_fecha[: fechas[-1].start() - fechas[0].end()].strip()
-        cola = despues_fecha[fechas[-1].end() - fechas[0].end():].strip()
+    if fechas_posteriores:
+        fecha_ultimo = fechas_posteriores[-1].group(0)
+        cuerpo = despues_fecha[: fechas_posteriores[-1].start()].strip()
+        cola = despues_fecha[fechas_posteriores[-1].end():].strip()
     else:
+        fecha_ultimo = ""
         cuerpo = despues_fecha
         cola = ""
 
-    fase = detectar_fase(cuerpo) or ""
+    fase, fase_start, fase_end = detectar_posicion_fase(cuerpo)
 
     if fase:
-        partes = re.split(re.escape(fase), cuerpo, maxsplit=1, flags=re.IGNORECASE)
-        materia = quitar_duplicados_espacios(partes[0])
-        ultimo_tramite = quitar_duplicados_espacios(partes[1] if len(partes) > 1 else "")
+        materia = quitar_duplicados_espacios(cuerpo[:fase_start])
+        ultimo_tramite = quitar_duplicados_espacios(cuerpo[fase_end:])
     else:
+        # Si no detecta fase, dejamos el cuerpo como último trámite para no perder información.
         materia = ""
         ultimo_tramite = quitar_duplicados_espacios(cuerpo)
 
-    procedimiento = quitar_duplicados_espacios(antes_fecha or cola)
-    if not procedimiento and cola:
-        procedimiento = quitar_duplicados_espacios(cola)
+    # Si la cola contiene texto útil, lo añadimos al último trámite,
+    # salvo que parezca claramente continuación del procedimiento.
+    if cola:
+        cola_limpia = quitar_duplicados_espacios(cola)
+        if cola_limpia:
+            ultimo_tramite = quitar_duplicados_espacios((ultimo_tramite + " " + cola_limpia).strip())
 
     return {
         "numero_procedimiento": numero,
@@ -306,7 +420,6 @@ def parsear_bloque(bloque: str) -> Optional[Dict]:
         "procedimiento": procedimiento,
         "texto_original": bloque,
     }
-
 
 def extraer_expedientes(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
