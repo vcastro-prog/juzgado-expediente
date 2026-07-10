@@ -799,12 +799,17 @@ with tab_actuales:
         ]
 
         columnas_por_defecto = [
-            "⭐", "Nº Resolución", "Fecha Dictado", "Tipo Resolución",
-            "Estado Resolución", "Nº Proced.", "Procedimiento",
-            "Intervención", "Interviniente",
+            "⭐",
+            "Nº Resolución",
+            "Fecha Dictado",
+            "Tipo Resolución",
+            "Estado Resolución",
+            "Nº Proced.",
+            "Procedimiento",
+            "Intervención",
+            "Interviniente",
             "Año",
             "Nº Juzgado",
-            "Procedimiento",
             "Materia",
             "Fase Procesal",
             "Último trámite",
@@ -827,11 +832,19 @@ with tab_actuales:
             st.warning("Selecciona al menos una columna para mostrar la tabla.")
             columnas_visibles = ["Nº Proced."]
 
+        # Evita nombres duplicados, ya que PyArrow/Streamlit no admite
+        # DataFrames con columnas repetidas.
+        columnas_visibles = list(dict.fromkeys(columnas_visibles))
+
         tabla = filtrado.copy()
         tabla["⭐"] = tabla["Favorito"].apply(lambda x: "⭐" if x else "")
 
-        columnas_finales = [c for c in columnas_visibles if c in tabla.columns]
-        tabla_visible = tabla[columnas_finales].copy()
+        columnas_finales = [
+            c for c in dict.fromkeys(columnas_visibles)
+            if c in tabla.columns
+        ]
+        tabla_visible = tabla.loc[:, ~tabla.columns.duplicated()]
+        tabla_visible = tabla_visible[columnas_finales].copy()
 
         st.session_state.df_exportar_filtrado = tabla_visible.copy()
         st.session_state.columnas_exportar_visibles = columnas_finales
