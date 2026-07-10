@@ -1,0 +1,14 @@
+Registros totales: 256
+Tipos detectados: {'Decreto': 140, 'Auto': 116}
+
+Muestras páginas 21-23:
+Página 21 | 000280/2026 | Decreto | 0000571/2024 | Procedimiento ordinario
+Página 21 | 000281/2026 | Decreto | 0001664/2022 | Juicio verbal (250.2)
+Página 21 | 000282/2026 | Decreto | 0000049/2023 | Ejecución de títulos no judiciales
+Página 21 | 000283/2026 | Decreto | 0001865/2025 | Monitorio
+Página 21 | 000284/2026 | Decreto | 0000265/2025 | Juicio verbal (condiciones generales contratación - 250.1.14 - Impugnación de la tasación de costas - 1
+Página 21 | 000285/2026 | Decreto | 0001906/2024 | Procedimiento ordinario - Impugnación de la tasación de costas - 1
+Página 21 | 000286/2026 | Decreto | 0000317/2025 | Ejecución de títulos judiciales
+Página 22 | 000287/2026 | Auto | 0000031/2026 | Monitorio - Pieza. Cuestión incidental de especial pronunciamiento - 1
+Página 22 | 000288/2026 | Auto | 0001003/2025 | Monitorio
+Página 22 | 000289/2026 | Auto | 0000510/2022 | Juicio verbal (250.2) - Cuenta de procurador - 1

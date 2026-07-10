@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pdfplumber
 
 
-PARSER_VERSION = "Parser v2.2.0"
+PARSER_VERSION = "Parser v2.2.2"
 
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
@@ -503,21 +503,50 @@ def limpiar_lineas_pagina_libro(texto_pagina: str) -> List[str]:
     return lineas
 
 
-def segmentar_registros_libro(pdf_file) -> List[List[str]]:
+def segmentar_registros_libro(pdf_file) -> List[Tuple[List[str], str, int]]:
+    """
+    Devuelve cada bloque junto con:
+    - el tipo de resolución de su página;
+    - el número de página.
+
+    Un mismo PDF puede contener varios tipos de resolución, por ejemplo
+    Decreto en unas páginas y Auto en otras.
+    """
     registros = []
+    ultimo_tipo_detectado = "Resolución"
+
     with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            lineas = limpiar_lineas_pagina_libro(page.extract_text() or "")
+        for numero_pagina, page in enumerate(pdf.pages, start=1):
+            texto_pagina = page.extract_text() or ""
+
+            m_tipo = re.search(
+                r"Tipo Resolución:\s*([^\n\r]+)",
+                texto_pagina,
+                re.IGNORECASE,
+            )
+
+            if m_tipo:
+                ultimo_tipo_detectado = limpiar_texto(m_tipo.group(1))
+
+            tipo_pagina = ultimo_tipo_detectado
+            lineas = limpiar_lineas_pagina_libro(texto_pagina)
             actual = []
+
             for linea in lineas:
                 if RESOLUCION_LINE_RE.match(linea):
                     if actual:
-                        registros.append(actual)
+                        registros.append(
+                            (actual, tipo_pagina, numero_pagina)
+                        )
                     actual = [linea]
                 elif actual:
                     actual.append(linea)
+
             if actual:
-                registros.append(actual)
+                registros.append(
+                    (actual, tipo_pagina, numero_pagina)
+                )
+
     return registros
 
 
@@ -613,18 +642,27 @@ def parsear_registro_libro(lineas: List[str], tipo_resolucion: str,
 def extraer_expedientes_libro_resoluciones(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
     juzgado_info = extraer_juzgado_info(texto)
-    tipo_resolucion = extraer_tipo_resolucion(texto)
     bloques = segmentar_registros_libro(pdf_file)
 
     registros = []
     vistos = set()
-    for bloque in bloques:
-        reg = parsear_registro_libro(bloque, tipo_resolucion, juzgado_info)
+
+    for bloque, tipo_resolucion, numero_pagina in bloques:
+        reg = parsear_registro_libro(
+            bloque,
+            tipo_resolucion,
+            juzgado_info,
+        )
+
         if not reg:
             continue
+
+        reg["pagina_pdf"] = numero_pagina
+
         if reg["clave_expediente"] not in vistos:
             registros.append(reg)
             vistos.add(reg["clave_expediente"])
+
     return registros
 
 def extraer_expedientes(pdf_file) -> List[Dict]:

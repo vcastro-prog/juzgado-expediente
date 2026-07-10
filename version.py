@@ -1,3 +1,3 @@
-APP_VERSION = "v2.2.1"
+APP_VERSION = "v2.2.2"
 BUILD_DATE = "2026-05-21"
-APP_CHANGELOG = "Corrección de columnas duplicadas en la tabla y exportación."
+APP_CHANGELOG = "Detección del tipo de resolución por página: Decreto, Auto, Sentencia, etc."
