@@ -1,0 +1,9 @@
+PLAZA 11.pdf: tipo=libro_resoluciones paginas=48 registros=294 error=
+PLAZA 10.pdf: tipo=libro_resoluciones paginas=34 registros=202 error=
+PLAZA 9.pdf: tipo=libro_resoluciones paginas=47 registros=294 error=
+PLAZA 6.pdf: tipo=libro_resoluciones paginas=60 registros=371 error=
+PLAZA 5.pdf: tipo=libro_resoluciones paginas=21 registros=129 error=
+PLAZA 4.pdf: tipo=libro_resoluciones paginas=33 registros=209 error=
+PLAZA3.pdf: tipo=libro_resoluciones paginas=40 registros=252 error=
+PLAZA 2.pdf: tipo=libro_resoluciones paginas=47 registros=296 error=
+11111.pdf: tipo=libro_resoluciones paginas=67 registros=427 error=

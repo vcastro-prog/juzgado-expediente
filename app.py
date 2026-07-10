@@ -59,7 +59,7 @@ if not st.session_state.autenticado:
 
     st.stop()
 
-from parser_pdf import extraer_expedientes, PDFConVariosJuzgadosError
+from parser_pdf import extraer_expedientes, extraer_diagnostico_pdf, PARSER_VERSION, PDFConVariosJuzgadosError
 from version import APP_VERSION, BUILD_DATE, APP_CHANGELOG
 from database import (
     DB_PATH,
@@ -84,7 +84,7 @@ st.markdown(
     <div style="display:flex; align-items:baseline; gap:14px; margin-bottom:0.4rem;">
         <h1 style="margin:0;">⚖️ Control de procedimientos del juzgado</h1>
         <span style="font-size:0.95rem; color:gray; white-space:nowrap;">
-            Versión {APP_VERSION} · Build {BUILD_DATE}
+            Versión {APP_VERSION} · Build {BUILD_DATE} · {PARSER_VERSION}
         </span>
     </div>
     """,
@@ -339,7 +339,7 @@ def filtrar_por_fecha_cambio(df_cambios, dias):
 
 
 with st.sidebar:
-    st.caption(f"Versión {APP_VERSION} · {BUILD_DATE}")
+    st.caption(f"Versión {APP_VERSION} · {BUILD_DATE} · {PARSER_VERSION}")
 
     if st.button("Cerrar sesión"):
         st.session_state.autenticado = False
@@ -364,6 +364,11 @@ with st.sidebar:
             with st.spinner("Leyendo PDFs y actualizando base de datos..."):
                 for pdf in pdfs:
                     try:
+                        diagnostico = extraer_diagnostico_pdf(pdf)
+
+                        if diagnostico.get("error"):
+                            raise Exception(diagnostico["error"])
+
                         registros = extraer_expedientes(pdf)
                         cambios = guardar_importacion(
                             registros,
@@ -376,6 +381,9 @@ with st.sidebar:
                         resumen_importacion.append(
                             {
                                 "Archivo": pdf.name,
+                                "Tipo PDF": diagnostico.get("tipo_pdf", ""),
+                                "Páginas": diagnostico.get("paginas", ""),
+                                "Parser": diagnostico.get("parser_version", ""),
                                 "Expedientes leídos": len(registros),
                                 "Cambios/nuevos detectados": len(cambios),
                                 "Estado": "Procesado",
@@ -386,6 +394,9 @@ with st.sidebar:
                         resumen_importacion.append(
                             {
                                 "Archivo": pdf.name,
+                                "Tipo PDF": "",
+                                "Páginas": "",
+                                "Parser": PARSER_VERSION,
                                 "Expedientes leídos": 0,
                                 "Cambios/nuevos detectados": 0,
                                 "Estado": "Bloqueado: varios juzgados detectados",
@@ -404,6 +415,9 @@ with st.sidebar:
                         resumen_importacion.append(
                             {
                                 "Archivo": pdf.name,
+                                "Tipo PDF": "",
+                                "Páginas": "",
+                                "Parser": PARSER_VERSION,
                                 "Expedientes leídos": 0,
                                 "Cambios/nuevos detectados": 0,
                                 "Estado": f"Error: {e}",

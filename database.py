@@ -111,11 +111,6 @@ def inicializar(conn):
     if not columna_existe(conn, "expedientes", "juzgado_seccion"):
         conn.execute("ALTER TABLE expedientes ADD COLUMN juzgado_seccion TEXT DEFAULT ''")
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_expedientes_clave ON expedientes (clave_expediente)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_expedientes_juzgado_numero ON expedientes (juzgado_numero)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_cambios_clave ON historico_cambios (clave_expediente)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_importaciones_fecha ON importaciones (fecha_importacion)")
-
     conn.commit()
 
 
@@ -305,21 +300,6 @@ def cargar_expedientes() -> pd.DataFrame:
                 END AS 'Estado F. Últ. Trámite',
                 primera_importacion AS 'Primera importación',
                 ultima_importacion AS 'Última importación',
-                CASE
-                    WHEN EXISTS (
-                        SELECT 1
-                        FROM historico_cambios hc
-                        WHERE hc.clave_expediente = expedientes.clave_expediente
-                          AND date(hc.fecha_cambio) = date('now')
-                    )
-                    THEN '🟢 Modificado'
-                    ELSE ''
-                END AS 'Estado cambios',
-                (
-                    SELECT max(hc.fecha_cambio)
-                    FROM historico_cambios hc
-                    WHERE hc.clave_expediente = expedientes.clave_expediente
-                ) AS 'Último cambio',
                 favorito AS 'Favorito',
                 nota AS 'Nota',
                 CASE
