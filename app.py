@@ -556,6 +556,10 @@ with tab_actuales:
             materias = sorted([x for x in df["Materia"].dropna().unique() if x])
             anios = sorted([x for x in df["Año"].dropna().unique() if x])
             anios_ultimo_tramite = sorted([x for x in df["Año Últ. Trámite"].dropna().unique() if x])
+            tipos_resolucion = sorted([x for x in df["Tipo Resolución"].dropna().unique() if x])
+            estados_resolucion = sorted([x for x in df["Estado Resolución"].dropna().unique() if x])
+            intervenciones = sorted([x for x in df["Intervención"].dropna().unique() if x])
+            anios_resolucion = sorted([x for x in df["Año Resolución"].dropna().unique() if x])
 
             filtro_numero = col1.text_input(
                 "Nº procedimiento / patrón",
@@ -592,6 +596,16 @@ with tab_actuales:
                 "Filtro de nº procedimiento: usa *5, *45 o *345 para buscar expedientes cuyo número termine así. "
                 "Usa *5/2025 para limitar además al año 2025."
             )
+
+            st.markdown("#### Filtros del Libro de Resoluciones")
+            cr1, cr2, cr3 = st.columns(3)
+            filtro_num_resolucion = cr1.text_input("Nº resolución", key="filtro_num_resolucion")
+            filtro_anio_resolucion = cr2.multiselect("Año de resolución", anios_resolucion, key="filtro_anio_resolucion")
+            filtro_tipo_resolucion = cr3.multiselect("Tipo de resolución", tipos_resolucion, key="filtro_tipo_resolucion")
+            cr4, cr5, cr6 = st.columns(3)
+            filtro_estado_resolucion = cr4.multiselect("Estado de resolución", estados_resolucion, key="filtro_estado_resolucion")
+            filtro_intervencion = cr5.multiselect("Intervención", intervenciones, key="filtro_intervencion")
+            filtro_interviniente = cr6.text_input("Interviniente contiene", key="filtro_interviniente")
 
             col_fecha1, col_fecha2 = st.columns(2)
             filtro_anio_ultimo_tramite = col_fecha1.multiselect(
@@ -633,6 +647,19 @@ with tab_actuales:
 
         if filtro_anio:
             filtrado = filtrado[filtrado["Año"].isin(filtro_anio)]
+
+        if filtro_num_resolucion:
+            filtrado = filtrado[filtrado["Nº Resolución"].astype(str).str.contains(filtro_num_resolucion, case=False, na=False)]
+        if filtro_anio_resolucion:
+            filtrado = filtrado[filtrado["Año Resolución"].isin(filtro_anio_resolucion)]
+        if filtro_tipo_resolucion:
+            filtrado = filtrado[filtrado["Tipo Resolución"].isin(filtro_tipo_resolucion)]
+        if filtro_estado_resolucion:
+            filtrado = filtrado[filtrado["Estado Resolución"].isin(filtro_estado_resolucion)]
+        if filtro_intervencion:
+            filtrado = filtrado[filtrado["Intervención"].isin(filtro_intervencion)]
+        if filtro_interviniente:
+            filtrado = filtrado[filtrado["Interviniente"].astype(str).str.contains(filtro_interviniente, case=False, na=False)]
 
         if filtro_favoritos:
             filtrado = filtrado[filtrado["Favorito"] == 1]
@@ -747,7 +774,9 @@ with tab_actuales:
         # La vista exacta para exportar se guarda después de seleccionar columnas visibles.
 
         columnas_disponibles = [
-            "⭐",
+            "⭐", "Tipo documento", "Nº Resolución", "Año Resolución",
+            "Fecha Dictado", "Hora Dictado", "Tipo Resolución",
+            "Estado Resolución", "Intervención", "Interviniente",
             "Nº Proced.",
             "Año",
             "F. Aceptación",
@@ -770,8 +799,9 @@ with tab_actuales:
         ]
 
         columnas_por_defecto = [
-            "⭐",
-            "Nº Proced.",
+            "⭐", "Nº Resolución", "Fecha Dictado", "Tipo Resolución",
+            "Estado Resolución", "Nº Proced.", "Procedimiento",
+            "Intervención", "Interviniente",
             "Año",
             "Nº Juzgado",
             "Procedimiento",

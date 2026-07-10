@@ -1,3 +1,3 @@
-APP_VERSION = "v2.0.1"
+APP_VERSION = "v2.2.0"
 BUILD_DATE = "2026-05-21"
-APP_CHANGELOG = "App completa con filtros/exportación/backup y Parser v2 con diagnóstico PDF."
+APP_CHANGELOG = "Parser exacto y filtros del Libro de Resoluciones."

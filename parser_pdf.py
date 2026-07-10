@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pdfplumber
 
 
-PARSER_VERSION = "Parser v2.0.0"
+PARSER_VERSION = "Parser v2.2.0"
 
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
@@ -260,6 +260,14 @@ def crear_clave(reg: Dict) -> str:
 
 
 def completar_registro_juzgado(reg: Dict, juzgado_info: Dict[str, str]) -> Dict:
+    reg.setdefault("tipo_documento", "alarde")
+    reg.setdefault("numero_resolucion", "")
+    reg.setdefault("fecha_dictado", "")
+    reg.setdefault("hora_dictado", "")
+    reg.setdefault("tipo_resolucion", "")
+    reg.setdefault("estado_resolucion", "")
+    reg.setdefault("intervencion", "")
+    reg.setdefault("interviniente", "")
     reg["juzgado"] = juzgado_info["organo_completo"]
     reg["organo_completo"] = juzgado_info["organo_completo"]
     reg["juzgado_numero"] = juzgado_info["juzgado_numero"]
@@ -460,182 +468,164 @@ def extraer_expedientes_alarde(pdf_file) -> List[Dict]:
 # LIBRO DE RESOLUCIONES
 # ============================================================
 
+ROLES_INTERVENCION = [
+    "Administrador concursal", "Representante legal", "Interviniente",
+    "Demandante", "Demandado", "Ejecutante", "Ejecutado", "Interesado",
+    "Codemandante", "Codemandado", "Procurador", "Abogado", "Perito",
+    "Heredero", "Cónyuge", "Administrador",
+]
+
+
 def extraer_tipo_resolucion(texto: str) -> str:
     m = re.search(r"Tipo Resolución:\s*([^\n\r]+)", texto, re.IGNORECASE)
-    if m:
-        return limpiar_texto(m.group(1))
-    return "Resolución"
+    return limpiar_texto(m.group(1)) if m else "Resolución"
 
 
-def limpiar_lineas_libro(texto: str) -> List[str]:
+def limpiar_lineas_pagina_libro(texto_pagina: str) -> List[str]:
     lineas = []
-    for raw in texto.splitlines():
+    for raw in texto_pagina.splitlines():
         linea = limpiar_texto(raw)
         if not linea:
             continue
-
-        if any(x in linea for x in [
-            "Observaciones:",
-            "Nº resolución",
-            "F. Dictado",
-            "F. public.",
-            "Sig. Recurso",
-            "Resultado",
-            "Procedimiento",
-            "Intervención Interviniente",
-            "Órgano de Registro:",
-            "Periodo de",
-            "Libro de Resoluciones",
-            "Página:",
-        ]):
-            continue
-
-        if re.fullmatch(r"\d+", linea):
-            continue
-
-        # Fecha de impresión del encabezado/pie.
-        if FECHA_RE.fullmatch(linea):
-            continue
-
         if linea.startswith("Tipo Resolución:"):
             continue
-
+        if any(fragmento in linea for fragmento in [
+            "Página:", "Libro de Resoluciones - CIVIL", "Órgano de Registro:",
+            "Periodo de ", "Nº resolución F. Dictado",
+            "Intervención Interviniente", "Observaciones:",
+        ]):
+            continue
+        if FECHA_RE.fullmatch(linea):
+            continue
+        if re.fullmatch(r"\d{1,3}", linea):
+            continue
         lineas.append(linea)
-
     return lineas
 
 
-def unir_registros_libro(texto: str) -> List[str]:
-    """
-    Reconstruye registros del Libro de Resoluciones.
-
-    Formato habitual:
-    Fecha dictado
-    Hora
-    Intervención + interviniente
-    Nº resolución + estado + procedimiento / expediente
-
-    En algunos registros el expediente aparece en una línea posterior.
-    """
-    lineas = limpiar_lineas_libro(texto)
+def segmentar_registros_libro(pdf_file) -> List[List[str]]:
     registros = []
-
-    prefijo = []
-    actual = None
-
-    for linea in lineas:
-        if FECHA_LINE_RE.match(linea):
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            lineas = limpiar_lineas_pagina_libro(page.extract_text() or "")
+            actual = []
+            for linea in lineas:
+                if RESOLUCION_LINE_RE.match(linea):
+                    if actual:
+                        registros.append(actual)
+                    actual = [linea]
+                elif actual:
+                    actual.append(linea)
             if actual:
-                registros.append(" ".join(actual))
-                actual = None
-            prefijo = [linea]
-            continue
-
-        if RESOLUCION_LINE_RE.match(linea):
-            if actual:
-                registros.append(" ".join(actual))
-            actual = prefijo + [linea]
-            prefijo = []
-            continue
-
-        if actual is not None:
-            # Continuación posterior a la resolución: suele ser expediente cuando el procedimiento fue multilínea.
-            actual.append(linea)
-        else:
-            # Fecha/hora/interviniente antes de la resolución.
-            prefijo.append(linea)
-
-    if actual:
-        registros.append(" ".join(actual))
-
-    return [quitar_duplicados_espacios(r) for r in registros if RESOLUCION_RE.search(r)]
+                registros.append(actual)
+    return registros
 
 
-def extraer_estado_libro(registro: str) -> str:
+def separar_intervencion_interviniente(texto: str) -> Tuple[str, str]:
+    texto = limpiar_texto(texto)
+    for rol in sorted(ROLES_INTERVENCION, key=len, reverse=True):
+        if texto.lower().startswith(rol.lower()):
+            return rol, texto[len(rol):].strip()
+    return "", texto
+
+
+def extraer_estado_resolucion(texto: str) -> Tuple[str, str]:
     for estado in ["Pendiente de firmeza", "Recurrida", "Firme"]:
-        if re.search(re.escape(estado), registro, re.IGNORECASE):
-            return estado
-    return ""
+        m = re.search(r"\b" + re.escape(estado) + r"\b", texto, re.IGNORECASE)
+        if m:
+            restante = (texto[:m.start()] + " " + texto[m.end():]).strip()
+            return estado, limpiar_texto(restante)
+    return "", texto
 
 
-def limpiar_procedimiento_libro(procedimiento: str) -> str:
-    procedimiento = limpiar_texto(procedimiento)
-    procedimiento = re.sub(r"\s+-\s+", " - ", procedimiento)
-    return procedimiento
+def parsear_registro_libro(lineas: List[str], tipo_resolucion: str,
+                           juzgado_info: Dict[str, str]) -> Optional[Dict]:
+    if not lineas:
+        return None
 
-
-def parsear_registro_libro(registro: str, tipo_resolucion: str, juzgado_info: Dict[str, str]) -> Optional[Dict]:
-    registro = quitar_duplicados_espacios(registro)
-
-    m_res = RESOLUCION_RE.search(registro)
+    principal = limpiar_texto(lineas[0])
+    m_res = RESOLUCION_LINE_RE.match(principal)
     if not m_res:
         return None
 
     numero_resolucion = m_res.group(0)
-    fechas = FECHA_RE.findall(registro)
-    fecha_dictado = fechas[0] if fechas else ""
-    estado = extraer_estado_libro(registro)
+    resto_principal = principal[m_res.end():].strip()
 
-    # Interviniente: entre la hora y el nº de resolución.
-    interviniente = ""
-    m_hora = HORA_RE.search(registro)
-    if m_hora and m_hora.end() < m_res.start():
-        interviniente = registro[m_hora.end():m_res.start()].strip()
+    m_fecha = FECHA_RE.search(resto_principal)
+    fecha_dictado = m_fecha.group(0) if m_fecha else ""
+    cuerpo = resto_principal[m_fecha.end():].strip() if m_fecha else resto_principal
 
-    despues_res = registro[m_res.end():].strip()
+    estado, cuerpo = extraer_estado_resolucion(cuerpo)
 
-    # El expediente puede estar inmediatamente después del estado o al final si el procedimiento fue multilínea.
-    expediente_matches = list(EXPEDIENTE_ANY_RE.finditer(despues_res))
-    expediente_origen = expediente_matches[0].group(0) if expediente_matches else numero_resolucion
+    hora_dictado = ""
+    indice_hora = None
+    continuacion_procedimiento = []
 
-    procedimiento = despues_res
+    for idx, linea in enumerate(lineas[1:], start=1):
+        m_hora = HORA_RE.search(linea)
+        if m_hora:
+            hora_dictado = m_hora.group(0)
+            indice_hora = idx
+            despues_hora = limpiar_texto(linea[m_hora.end():])
+            if despues_hora:
+                continuacion_procedimiento.append(despues_hora)
+            break
 
-    # Quitar estado.
-    if estado:
-        procedimiento = re.sub(re.escape(estado), "", procedimiento, count=1, flags=re.IGNORECASE).strip()
+    lineas_interviniente = lineas[indice_hora + 1:] if indice_hora is not None else []
+    texto_interviniente = limpiar_texto(" ".join(lineas_interviniente))
+    intervencion, interviniente = separar_intervencion_interviniente(texto_interviniente)
 
-    # Quitar todos los expedientes 7/4 del procedimiento y quedarnos con el texto restante.
-    procedimiento = EXPEDIENTE_ANY_RE.sub("", procedimiento).strip()
-    procedimiento = limpiar_procedimiento_libro(procedimiento)
+    cuerpo_completo = limpiar_texto(" ".join([cuerpo] + continuacion_procedimiento))
+    expedientes = list(EXPEDIENTE_ANY_RE.finditer(cuerpo_completo))
+    numero_procedimiento = expedientes[0].group(0) if expedientes else ""
 
-    ultimo = quitar_duplicados_espacios(
-        f"Nº resolución {numero_resolucion}. {tipo_resolucion}. {interviniente}"
-    )
+    procedimiento = EXPEDIENTE_ANY_RE.sub("", cuerpo_completo)
+    procedimiento = limpiar_texto(procedimiento)
+    procedimiento = re.sub(r"\s+-\s+", " - ", procedimiento).strip()
 
     reg = {
-        "numero_procedimiento": expediente_origen,
+        "tipo_documento": "libro_resoluciones",
+        "numero_resolucion": numero_resolucion,
+        "fecha_dictado": fecha_dictado,
+        "hora_dictado": hora_dictado,
+        "tipo_resolucion": tipo_resolucion,
+        "estado_resolucion": estado,
+        "intervencion": intervencion,
+        "interviniente": interviniente,
+        "numero_procedimiento": numero_procedimiento,
         "fecha_aceptacion": fecha_dictado,
         "materia": tipo_resolucion,
         "fase_procesal": estado,
-        "ultimo_tramite": ultimo,
+        "ultimo_tramite": f"{tipo_resolucion} {numero_resolucion}".strip(),
         "fecha_ultimo_tramite": fecha_dictado,
         "procedimiento": procedimiento,
-        "texto_original": registro,
+        "texto_original": limpiar_texto(" ".join(lineas)),
     }
 
-    return completar_registro_juzgado(reg, juzgado_info)
+    reg = completar_registro_juzgado(reg, juzgado_info)
+    reg["clave_expediente"] = " | ".join([
+        juzgado_info.get("organo_completo", "").lower().strip(),
+        numero_resolucion.lower().strip(),
+    ])
+    return reg
 
 
 def extraer_expedientes_libro_resoluciones(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
     juzgado_info = extraer_juzgado_info(texto)
     tipo_resolucion = extraer_tipo_resolucion(texto)
-    registros_texto = unir_registros_libro(texto)
+    bloques = segmentar_registros_libro(pdf_file)
 
     registros = []
     vistos = set()
-
-    for registro_texto in registros_texto:
-        reg = parsear_registro_libro(registro_texto, tipo_resolucion, juzgado_info)
+    for bloque in bloques:
+        reg = parsear_registro_libro(bloque, tipo_resolucion, juzgado_info)
         if not reg:
             continue
-        clave = reg["clave_expediente"]
-        if clave not in vistos:
+        if reg["clave_expediente"] not in vistos:
             registros.append(reg)
-            vistos.add(clave)
-
+            vistos.add(reg["clave_expediente"])
     return registros
-
 
 def extraer_expedientes(pdf_file) -> List[Dict]:
     texto = extraer_texto(pdf_file)
