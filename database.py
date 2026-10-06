@@ -139,7 +139,7 @@ def normalizar_valor(v):
     return str(v).strip()
 
 
-def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.DataFrame:
+def guardar_importacion(registros: List[Dict], nombre_archivo: str = "", progress_callback=None) -> pd.DataFrame:
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cambios = []
     nuevos = 0
@@ -169,7 +169,8 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
     ]
 
     with get_conn() as conn:
-        for reg in registros:
+        total_registros = max(len(registros), 1)
+        for indice_registro, reg in enumerate(registros, start=1):
             clave = reg["clave_expediente"]
             actual = conn.execute(
                 "SELECT * FROM expedientes WHERE clave_expediente = ?",
@@ -289,6 +290,9 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "") -> pd.D
                         """,
                         (ahora, clave),
                     )
+
+            if progress_callback and (indice_registro == 1 or indice_registro % 25 == 0 or indice_registro == total_registros):
+                progress_callback(indice_registro, total_registros)
 
         conn.execute(
             """

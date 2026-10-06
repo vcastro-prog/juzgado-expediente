@@ -1,3 +1,3 @@
-APP_VERSION = "v2.2.4"
+APP_VERSION = "v2.2.5"
 BUILD_DATE = "2026-10-06"
-APP_CHANGELOG = "Lectura ALARDE por coordenadas de columna: corrige textos espurios aa/aaa, conserva Procedimientos ordinarios y evita contaminación entre columnas y páginas."
+APP_CHANGELOG = "Progreso visible durante lectura y guardado de PDFs, con página actual, expedientes detectados y porcentaje. Se evita además una lectura completa duplicada durante la importación."

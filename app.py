@@ -361,69 +361,124 @@ with st.sidebar:
             total_pdfs = len(pdfs)
             resumen_importacion = []
 
-            with st.spinner("Leyendo PDFs y actualizando base de datos..."):
-                for pdf in pdfs:
-                    try:
-                        diagnostico = extraer_diagnostico_pdf(pdf)
+            progreso = st.progress(0, text="Preparando procesamiento...")
+            estado_proceso = st.empty()
 
-                        if diagnostico.get("error"):
-                            raise Exception(diagnostico["error"])
+            for indice_pdf, pdf in enumerate(pdfs, start=1):
+                try:
+                    progreso_pdf = {"paginas": 0, "detectados": 0}
+                    registros_detectados = 0
+                    base_pdf = (indice_pdf - 1) / max(total_pdfs, 1)
+                    tramo_pdf = 1 / max(total_pdfs, 1)
 
-                        registros = extraer_expedientes(pdf)
-                        cambios = guardar_importacion(
-                            registros,
-                            nombre_archivo=pdf.name,
+                    def actualizar_progreso_parser(fase, actual, total, detectados):
+                        # Estado mutable para comunicar progreso desde el callback
+                        progreso_pdf["paginas"] = total or progreso_pdf["paginas"]
+                        progreso_pdf["detectados"] = detectados or progreso_pdf["detectados"]
+                        proporcion = (actual / max(total, 1))
+                        if fase == "preparando":
+                            local = 0.05 + 0.20 * proporcion
+                            detalle = f"Analizando estructura: página {actual} de {total}"
+                        else:
+                            local = 0.25 + 0.55 * proporcion
+                            detalle = f"Leyendo página {actual} de {total} · Expedientes detectados: {detectados}"
+                        global_pct = int(100 * (base_pdf + tramo_pdf * local))
+                        progreso.progress(
+                            min(global_pct, 99),
+                            text=f"{pdf.name} · {detalle}",
+                        )
+                        estado_proceso.caption(
+                            f"Archivo {indice_pdf} de {total_pdfs} · {detalle}"
                         )
 
-                        total_registros += len(registros)
-                        total_cambios += len(cambios)
+                    registros = extraer_expedientes(
+                        pdf,
+                        progress_callback=actualizar_progreso_parser,
+                    )
 
-                        resumen_importacion.append(
-                            {
-                                "Archivo": pdf.name,
-                                "Tipo PDF": diagnostico.get("tipo_pdf", ""),
-                                "Páginas": diagnostico.get("paginas", ""),
-                                "Parser": diagnostico.get("parser_version", ""),
-                                "Expedientes leídos": len(registros),
-                                "Cambios/nuevos detectados": len(cambios),
-                                "Estado": "Procesado",
-                            }
+                    tipo_pdf = registros[0].get("tipo_documento", "") if registros else ""
+                    if tipo_pdf == "libro_resoluciones":
+                        tipo_pdf_visible = "Libro de Resoluciones"
+                    elif tipo_pdf == "alarde":
+                        tipo_pdf_visible = "ALARDE"
+                    else:
+                        tipo_pdf_visible = tipo_pdf or "PDF reconocido"
+
+                    def actualizar_progreso_bd(actual, total):
+                        local = 0.80 + 0.18 * (actual / max(total, 1))
+                        global_pct = int(100 * (base_pdf + tramo_pdf * local))
+                        progreso.progress(
+                            min(global_pct, 99),
+                            text=f"{pdf.name} · Guardando en base de datos: {actual} de {total}",
+                        )
+                        estado_proceso.caption(
+                            f"Archivo {indice_pdf} de {total_pdfs} · Comparando y guardando expediente {actual} de {total}"
                         )
 
-                    except PDFConVariosJuzgadosError as e:
-                        resumen_importacion.append(
-                            {
-                                "Archivo": pdf.name,
-                                "Tipo PDF": "",
-                                "Páginas": "",
-                                "Parser": PARSER_VERSION,
-                                "Expedientes leídos": 0,
-                                "Cambios/nuevos detectados": 0,
-                                "Estado": "Bloqueado: varios juzgados detectados",
-                            }
-                        )
-                        st.error(
-                            f"{pdf.name}: el PDF contiene varios juzgados u órganos. "
-                            "No se ha importado ningún dato de este archivo. "
-                            "Vuelve a cargarlo separado, un PDF por juzgado."
-                        )
-                        st.write("Órganos detectados:")
-                        for organo in e.juzgados_detectados:
-                            st.write(f"- {organo}")
+                    cambios = guardar_importacion(
+                        registros,
+                        nombre_archivo=pdf.name,
+                        progress_callback=actualizar_progreso_bd,
+                    )
 
-                    except Exception as e:
-                        resumen_importacion.append(
-                            {
-                                "Archivo": pdf.name,
-                                "Tipo PDF": "",
-                                "Páginas": "",
-                                "Parser": PARSER_VERSION,
-                                "Expedientes leídos": 0,
-                                "Cambios/nuevos detectados": 0,
-                                "Estado": f"Error: {e}",
-                            }
-                        )
-                        st.error(f"Error procesando {pdf.name}: {e}")
+                    total_registros += len(registros)
+                    total_cambios += len(cambios)
+
+                    resumen_importacion.append(
+                        {
+                            "Archivo": pdf.name,
+                            "Tipo PDF": tipo_pdf_visible,
+                            "Páginas": progreso_pdf["paginas"],
+                            "Parser": PARSER_VERSION,
+                            "Expedientes leídos": len(registros),
+                            "Cambios/nuevos detectados": len(cambios),
+                            "Estado": "Procesado",
+                        }
+                    )
+
+                    fin_pdf = int(100 * (indice_pdf / max(total_pdfs, 1)))
+                    progreso.progress(
+                        fin_pdf,
+                        text=f"{pdf.name} · Completado: {len(registros)} expedientes",
+                    )
+
+                except PDFConVariosJuzgadosError as e:
+                    resumen_importacion.append(
+                        {
+                            "Archivo": pdf.name,
+                            "Tipo PDF": "",
+                            "Páginas": progreso_pdf["paginas"],
+                            "Parser": PARSER_VERSION,
+                            "Expedientes leídos": 0,
+                            "Cambios/nuevos detectados": 0,
+                            "Estado": "Bloqueado: varios juzgados detectados",
+                        }
+                    )
+                    st.error(
+                        f"{pdf.name}: el PDF contiene varios juzgados u órganos. "
+                        "No se ha importado ningún dato de este archivo. "
+                        "Vuelve a cargarlo separado, un PDF por juzgado."
+                    )
+                    st.write("Órganos detectados:")
+                    for organo in e.juzgados_detectados:
+                        st.write(f"- {organo}")
+
+                except Exception as e:
+                    resumen_importacion.append(
+                        {
+                            "Archivo": pdf.name,
+                            "Tipo PDF": "",
+                            "Páginas": progreso_pdf["paginas"],
+                            "Parser": PARSER_VERSION,
+                            "Expedientes leídos": 0,
+                            "Cambios/nuevos detectados": 0,
+                            "Estado": f"Error: {e}",
+                        }
+                    )
+                    st.error(f"Error procesando {pdf.name}: {e}")
+
+            progreso.progress(100, text=f"Proceso completado · {total_registros} expedientes procesados")
+            estado_proceso.success("Procesamiento finalizado correctamente.")
 
             st.success(f"PDFs procesados: {total_pdfs}")
             st.info(f"Expedientes leídos: {total_registros}")
