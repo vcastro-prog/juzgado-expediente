@@ -1,3 +1,3 @@
-APP_VERSION = "v2.3.0"
+APP_VERSION = "v2.3.1"
 BUILD_DATE = "2026-10-06"
-APP_CHANGELOG = "Nuevo Dashboard multijuzgado: base de análisis por archivos importados, filtros activos visibles, resultado global, comparación proporcional por juzgado, gráfico y acceso rápido al detalle."
+APP_CHANGELOG = "Arranque seguro sin archivos ni fuentes registradas. El Dashboard activa la procedencia de PDFs solo cuando está disponible y mantiene compatibilidad con bases anteriores."

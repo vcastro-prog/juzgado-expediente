@@ -68,12 +68,25 @@ from database import (
     cargar_expedientes,
     cargar_cambios,
     cargar_importaciones,
-    cargar_fuentes_disponibles,
-    cargar_claves_por_fuentes,
     cargar_detalle_expediente,
     guardar_favorito_nota,
     resetear_base,
 )
+
+# Dashboard v2.3.1: las funciones de procedencia son opcionales al arrancar.
+# Esto permite iniciar la aplicación con una base vacía o con un database.py
+# anterior, y activar la selección por fuentes únicamente cuando esté disponible.
+try:
+    from database import cargar_fuentes_disponibles, cargar_claves_por_fuentes
+    SOPORTE_FUENTES = True
+except ImportError:
+    SOPORTE_FUENTES = False
+
+    def cargar_fuentes_disponibles():
+        return pd.DataFrame(columns=["Archivo", "Expedientes", "Última importación"])
+
+    def cargar_claves_por_fuentes(nombres_archivo):
+        return []
 
 
 st.set_page_config(
@@ -550,7 +563,11 @@ with st.sidebar:
 df = cargar_expedientes()
 df_cambios = cargar_cambios()
 df_importaciones = cargar_importaciones()
-df_fuentes = cargar_fuentes_disponibles()
+try:
+    df_fuentes = cargar_fuentes_disponibles() if SOPORTE_FUENTES else pd.DataFrame()
+except Exception:
+    # La procedencia de archivos no debe impedir nunca el arranque de ALARDE.
+    df_fuentes = pd.DataFrame()
 
 if "filtro_juzgado_click" not in st.session_state:
     st.session_state.filtro_juzgado_click = ""
