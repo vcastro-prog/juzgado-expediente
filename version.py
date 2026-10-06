@@ -1,3 +1,3 @@
-APP_VERSION = "v2.3.2"
+APP_VERSION = "v2.3.3"
 BUILD_DATE = "2026-10-06"
-APP_CHANGELOG = "Dashboard simplificado: comparación por juzgado en una única gráfica horizontal, orden numérico y etiquetas con resultado/total y porcentaje en cada barra."
+APP_CHANGELOG = "Dashboard más legible: datos clave junto al nombre del juzgado, resultado y porcentaje resaltados, total como referencia y barras comparativas sin duplicar cifras."
