@@ -1,3 +1,3 @@
-APP_VERSION = "v2.2.3"
+APP_VERSION = "v2.2.4"
 BUILD_DATE = "2026-10-06"
-APP_CHANGELOG = "Corrección del parser ALARDE: recuperación de Procedimientos ordinarios, limpieza de cabeceras por página y filtrado correcto de expedientes sin último trámite."
+APP_CHANGELOG = "Lectura ALARDE por coordenadas de columna: corrige textos espurios aa/aaa, conserva Procedimientos ordinarios y evita contaminación entre columnas y páginas."

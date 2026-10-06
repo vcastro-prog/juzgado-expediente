@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pdfplumber
 
 
-PARSER_VERSION = "Parser v2.2.3"
+PARSER_VERSION = "Parser v2.2.4"
 
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
@@ -466,30 +466,127 @@ def parsear_bloque_alarde(bloque: str) -> Optional[Dict]:
     }
 
 
-def extraer_expedientes_alarde(pdf_file) -> List[Dict]:
-    """Extrae ALARDE página a página.
+def _texto_palabras_columna(palabras: List[Dict], x_min: float, x_max: float) -> str:
+    """Reconstruye una celda del ALARDE respetando sus coordenadas de columna."""
+    seleccion = [
+        w for w in palabras
+        if x_min <= float(w.get("x0", 0)) < x_max
+    ]
+    if not seleccion:
+        return ""
 
-    Procesar todo el PDF como un único texto hacía que el último expediente de
-    una página absorbiera cabeceras, fechas o fragmentos de la página siguiente.
-    Al reconstruir cada página de forma independiente, el cierre de página actúa
-    también como cierre del registro.
+    # Agrupar por líneas visuales. Las palabras de una misma línea suelen
+    # compartir top; una tolerancia pequeña evita separar caracteres.
+    lineas = []
+    for w in sorted(seleccion, key=lambda z: (float(z.get("top", 0)), float(z.get("x0", 0)))):
+        top = float(w.get("top", 0))
+        if not lineas or abs(top - lineas[-1][0]) > 2.0:
+            lineas.append([top, [w]])
+        else:
+            lineas[-1][1].append(w)
+
+    partes = []
+    for _, ws in lineas:
+        partes.append(" ".join(str(w.get("text", "")) for w in sorted(ws, key=lambda z: float(z.get("x0", 0)))))
+    return limpiar_texto(" ".join(partes))
+
+
+def _limpiar_celda_alarde(texto: str) -> str:
+    texto = limpiar_texto(texto)
+    # Reparaciones de cortes visuales habituales del informe.
+    texto = texto.replace("Inicio/Demand a", "Inicio/Demanda")
+    texto = texto.replace("Inicio/Solicitu d", "Inicio/Solicitud")
+    return limpiar_texto(texto)
+
+
+def _extraer_registros_pagina_alarde(page, numero_pagina: int) -> List[Dict]:
+    """Extrae filas usando las posiciones reales de las columnas del PDF.
+
+    Esto evita que continuaciones como la ``a`` de ``Inicio/Demanda`` o líneas
+    largas de Procedimiento/Materia terminen dentro de ``Último trámite``.
     """
-    textos_paginas = []
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            textos_paginas.append(page.extract_text() or "")
+    palabras = page.extract_words() or []
+    if not palabras:
+        return []
 
-    texto = "\n".join(textos_paginas)
+    # Límites observados en el formato oficial ALARDE.
+    # Nº Proc | Procedimiento | F.Acept. | Materia | Fase | Últ.trámite |
+    # Fecha últ. trámite | Próximo trámite
+    limites = [0.0, 75.0, 195.0, 260.0, 395.0, 460.0, 600.0, 665.0, float(page.width) + 1]
+
+    inicios = []
+    for w in palabras:
+        t = str(w.get("text", ""))
+        if float(w.get("x0", 9999)) < 75 and EXPEDIENTE_RE.fullmatch(t):
+            inicios.append((float(w.get("top", 0)), t))
+    inicios.sort()
+
+    # El pie Observaciones marca el final útil de la tabla.
+    tops_obs = [
+        float(w.get("top", page.height))
+        for w in palabras
+        if str(w.get("text", "")).startswith("Observaciones")
+    ]
+    fin_tabla = min(tops_obs) if tops_obs else float(page.height)
+
+    registros = []
+    for i, (top_inicio, numero) in enumerate(inicios):
+        top_fin = inicios[i + 1][0] if i + 1 < len(inicios) else fin_tabla
+        # Tolerancia mínima para incluir palabras de la línea inicial y excluir
+        # con seguridad la fila siguiente.
+        fila = [
+            w for w in palabras
+            if top_inicio - 1.0 <= float(w.get("top", 0)) < top_fin - 1.0
+        ]
+
+        celdas = [
+            _texto_palabras_columna(fila, limites[j], limites[j + 1])
+            for j in range(8)
+        ]
+
+        procedimiento = _limpiar_celda_alarde(celdas[1])
+        fecha_aceptacion = _limpiar_celda_alarde(celdas[2])
+        materia = _limpiar_celda_alarde(celdas[3])
+        fase = _limpiar_celda_alarde(celdas[4])
+        ultimo = _limpiar_celda_alarde(celdas[5])
+        fecha_ultimo = _limpiar_celda_alarde(celdas[6])
+
+        # En columnas de fecha solo aceptamos una fecha real.
+        m_fecha = FECHA_RE.search(fecha_aceptacion)
+        fecha_aceptacion = m_fecha.group(0) if m_fecha else ""
+        m_fecha_u = FECHA_RE.search(fecha_ultimo)
+        fecha_ultimo = m_fecha_u.group(0) if m_fecha_u else ""
+
+        texto_original = " | ".join(
+            x for x in [numero, procedimiento, fecha_aceptacion, materia, fase, ultimo, fecha_ultimo]
+            if x
+        )
+
+        registros.append({
+            "numero_procedimiento": numero,
+            "fecha_aceptacion": fecha_aceptacion,
+            "materia": materia,
+            "fase_procesal": fase,
+            "ultimo_tramite": ultimo,
+            "fecha_ultimo_tramite": fecha_ultimo,
+            "procedimiento": procedimiento,
+            "texto_original": texto_original,
+            "pagina_pdf": numero_pagina,
+        })
+
+    return registros
+
+
+def extraer_expedientes_alarde(pdf_file) -> List[Dict]:
+    """Extrae ALARDE por página y por coordenadas de columna."""
+    # El texto global se conserva únicamente para identificar el órgano.
+    texto = extraer_texto(pdf_file)
     juzgado_info = extraer_juzgado_info(texto)
 
     registros_base = []
-    for numero_pagina, texto_pagina in enumerate(textos_paginas, start=1):
-        bloques = dividir_en_bloques(texto_pagina)
-        for bloque in bloques:
-            reg = parsear_bloque_alarde(bloque)
-            if reg and reg.get("numero_procedimiento"):
-                reg["pagina_pdf"] = numero_pagina
-                registros_base.append(reg)
+    with pdfplumber.open(pdf_file) as pdf:
+        for numero_pagina, page in enumerate(pdf.pages, start=1):
+            registros_base.extend(_extraer_registros_pagina_alarde(page, numero_pagina))
 
     registros = []
     vistos = set()
