@@ -1,6 +1,7 @@
 from io import BytesIO
 from datetime import datetime, timedelta
 import shutil
+import html
 
 import pandas as pd
 import streamlit as st
@@ -67,6 +68,8 @@ from database import (
     cargar_expedientes,
     cargar_cambios,
     cargar_importaciones,
+    cargar_fuentes_disponibles,
+    cargar_claves_por_fuentes,
     cargar_detalle_expediente,
     guardar_favorito_nota,
     resetear_base,
@@ -547,6 +550,7 @@ with st.sidebar:
 df = cargar_expedientes()
 df_cambios = cargar_cambios()
 df_importaciones = cargar_importaciones()
+df_fuentes = cargar_fuentes_disponibles()
 
 if "filtro_juzgado_click" not in st.session_state:
     st.session_state.filtro_juzgado_click = ""
@@ -590,6 +594,37 @@ with tab_actuales:
         st.session_state.descripcion_exportacion = "Sin expedientes"
         st.info("Aún no hay expedientes. Sube uno o varios PDFs desde la barra lateral.")
     else:
+        st.markdown("### 📊 Dashboard")
+        st.markdown("#### Base del análisis")
+
+        archivos_disponibles = df_fuentes["Archivo"].dropna().astype(str).tolist() if not df_fuentes.empty else []
+        if archivos_disponibles:
+            archivos_base = st.multiselect(
+                "Archivos incluidos en el análisis",
+                archivos_disponibles,
+                default=archivos_disponibles,
+                key="dashboard_archivos_base",
+                help="El denominador de cada juzgado se calcula sobre estos archivos, antes de aplicar los filtros.",
+            )
+            claves_base = cargar_claves_por_fuentes(archivos_base)
+            df_base = df[df["clave_expediente"].isin(claves_base)].copy() if archivos_base else df.iloc[0:0].copy()
+
+            if archivos_base:
+                detalle_base = df_fuentes[df_fuentes["Archivo"].isin(archivos_base)].copy()
+                cols_base = st.columns(min(4, max(1, len(detalle_base))))
+                for pos, (_, fila_base) in enumerate(detalle_base.iterrows()):
+                    with cols_base[pos % len(cols_base)]:
+                        st.caption(f"📄 {fila_base['Archivo']} · {int(fila_base['Expedientes'])} expedientes")
+        else:
+            # Compatibilidad con bases creadas antes de v2.3.0. Al reimportar un PDF
+            # se registra automáticamente su procedencia sin duplicar expedientes.
+            archivos_base = []
+            df_base = df.copy()
+            st.info(
+                "La base actual procede de una versión anterior y todavía no tiene asociados los archivos de origen. "
+                "El Dashboard analizará toda la base. Reimporta los PDF que quieras comparar para poder seleccionarlos aquí."
+            )
+
         with st.expander("Filtros avanzados", expanded=True):
 
             col_reset_1, col_reset_2 = st.columns([1, 5])
@@ -602,19 +637,19 @@ with tab_actuales:
                     st.rerun()
             col1, col2, col3, col4 = st.columns(4)
 
-            juzgados = sorted([x for x in df["Juzgado"].dropna().unique() if x])
-            numeros_juzgado = sorted([x for x in df["Nº Juzgado"].dropna().unique() if x])
-            tipos_organo = sorted([x for x in df["Tipo órgano"].dropna().unique() if x])
-            secciones = sorted([x for x in df["Sección"].dropna().unique() if x])
-            procedimientos = sorted([x for x in df["Procedimiento"].dropna().unique() if x])
-            fases = sorted([x for x in df["Fase Procesal"].dropna().unique() if x])
-            materias = sorted([x for x in df["Materia"].dropna().unique() if x])
-            anios = sorted([x for x in df["Año"].dropna().unique() if x])
-            anios_ultimo_tramite = sorted([x for x in df["Año Últ. Trámite"].dropna().unique() if x])
-            tipos_resolucion = sorted([x for x in df["Tipo Resolución"].dropna().unique() if x])
-            estados_resolucion = sorted([x for x in df["Estado Resolución"].dropna().unique() if x])
-            intervenciones = sorted([x for x in df["Intervención"].dropna().unique() if x])
-            anios_resolucion = sorted([x for x in df["Año Resolución"].dropna().unique() if x])
+            juzgados = sorted([x for x in df_base["Juzgado"].dropna().unique() if x])
+            numeros_juzgado = sorted([x for x in df_base["Nº Juzgado"].dropna().unique() if x])
+            tipos_organo = sorted([x for x in df_base["Tipo órgano"].dropna().unique() if x])
+            secciones = sorted([x for x in df_base["Sección"].dropna().unique() if x])
+            procedimientos = sorted([x for x in df_base["Procedimiento"].dropna().unique() if x])
+            fases = sorted([x for x in df_base["Fase Procesal"].dropna().unique() if x])
+            materias = sorted([x for x in df_base["Materia"].dropna().unique() if x])
+            anios = sorted([x for x in df_base["Año"].dropna().unique() if x])
+            anios_ultimo_tramite = sorted([x for x in df_base["Año Últ. Trámite"].dropna().unique() if x])
+            tipos_resolucion = sorted([x for x in df_base["Tipo Resolución"].dropna().unique() if x])
+            estados_resolucion = sorted([x for x in df_base["Estado Resolución"].dropna().unique() if x])
+            intervenciones = sorted([x for x in df_base["Intervención"].dropna().unique() if x])
+            anios_resolucion = sorted([x for x in df_base["Año Resolución"].dropna().unique() if x])
 
             filtro_numero = col1.text_input(
                 "Nº procedimiento / patrón",
@@ -679,6 +714,11 @@ with tab_actuales:
             filtro_tipo_organo = col_j2.multiselect("Tipo órgano", tipos_organo)
             filtro_seccion = col_j3.multiselect("Sección", secciones)
             procedimiento = st.multiselect("Procedimiento", procedimientos)
+            filtro_excluir_ejecuciones = st.checkbox(
+                "Excluir procedimientos de ejecución",
+                key="filtro_excluir_ejecuciones",
+                help="Excluye por el nombre del procedimiento (contiene 'ejecuci'). No excluye un Auxilio Nacional solo porque su fase sea Ejecución.",
+            )
             fase = st.multiselect("Fase procesal", fases)
             materia = st.multiselect("Materia", materias)
 
@@ -695,7 +735,7 @@ with tab_actuales:
             tramite_contiene = col5.text_input("Último trámite contiene")
             texto_general = col6.text_input("Búsqueda general")
 
-        filtrado = df.copy()
+        filtrado = df_base.copy()
 
         if filtro_numero:
             filtrado = filtrar_por_patron_expediente(filtrado, filtro_numero)
@@ -751,6 +791,10 @@ with tab_actuales:
 
         if procedimiento:
             filtrado = filtrado[filtrado["Procedimiento"].isin(procedimiento)]
+        if filtro_excluir_ejecuciones:
+            filtrado = filtrado[
+                ~filtrado["Procedimiento"].astype(str).str.contains("ejecuci", case=False, na=False)
+            ]
         if fase:
             filtrado = filtrado[filtrado["Fase Procesal"].isin(fase)]
         if materia:
@@ -763,68 +807,109 @@ with tab_actuales:
 
         filtrado = filtrar_por_texto(filtrado, texto_general)
 
-        st.subheader("Carga por juzgado del filtro aplicado")
+        # =========================
+        # DASHBOARD MULTIJUZGADO v2.3.0
+        # =========================
+        filtros_activos = []
+        if filtro_numero: filtros_activos.append(f"Nº procedimiento: {filtro_numero}")
+        if filtro_anio: filtros_activos.append("Año: " + ", ".join(map(str, filtro_anio)))
+        if filtro_fecha_vacia: filtros_activos.append("Fecha Últ. Trámite: vacía")
+        elif filtro_anio_ultimo_tramite: filtros_activos.append("Año Últ. Trámite: " + ", ".join(map(str, filtro_anio_ultimo_tramite)))
+        if filtro_excluir_ejecuciones: filtros_activos.append("Procedimiento: excluidas ejecuciones")
+        if procedimiento: filtros_activos.append("Procedimiento: " + ", ".join(map(str, procedimiento)))
+        if fase: filtros_activos.append("Fase: " + ", ".join(map(str, fase)))
+        if materia: filtros_activos.append("Materia: " + ", ".join(map(str, materia)))
+        if juzgado: filtros_activos.append("Juzgado: " + ", ".join(map(str, juzgado)))
+        if filtro_num_juzgado: filtros_activos.append("Nº juzgado: " + ", ".join(map(str, filtro_num_juzgado)))
+        if filtro_tipo_organo: filtros_activos.append("Tipo órgano: " + ", ".join(map(str, filtro_tipo_organo)))
+        if filtro_seccion: filtros_activos.append("Sección: " + ", ".join(map(str, filtro_seccion)))
+        if tramite_contiene: filtros_activos.append(f"Último trámite contiene: {tramite_contiene}")
+        if texto_general: filtros_activos.append(f"Búsqueda: {texto_general}")
+        if filtro_favoritos: filtros_activos.append("Solo favoritos")
+        if filtro_archivados != "Todos": filtros_activos.append(f"Estado: {filtro_archivados}")
+        if filtro_num_resolucion: filtros_activos.append(f"Nº resolución: {filtro_num_resolucion}")
+        if filtro_anio_resolucion: filtros_activos.append("Año resolución: " + ", ".join(map(str, filtro_anio_resolucion)))
+        if filtro_tipo_resolucion: filtros_activos.append("Tipo resolución: " + ", ".join(map(str, filtro_tipo_resolucion)))
+        if filtro_estado_resolucion: filtros_activos.append("Estado resolución: " + ", ".join(map(str, filtro_estado_resolucion)))
+        if filtro_intervencion: filtros_activos.append("Intervención: " + ", ".join(map(str, filtro_intervencion)))
+        if filtro_interviniente: filtros_activos.append(f"Interviniente: {filtro_interviniente}")
+        if st.session_state.filtro_juzgado_click: filtros_activos.append("Filtro rápido de juzgado activo")
 
-        if filtrado.empty:
-            st.info("No hay expedientes para los filtros seleccionados.")
-        else:
-            resumen_juzgado = (
-                filtrado.groupby(
-                    ["Nº Juzgado", "Tipo órgano", "Sección", "Órgano completo"],
-                    dropna=False
-                )
-                .size()
-                .reset_index(name="Expedientes")
-                .sort_values("Expedientes", ascending=False)
-            )
-            total_filtrado = int(resumen_juzgado["Expedientes"].sum())
-            resumen_juzgado["%"] = (
-                resumen_juzgado["Expedientes"] / total_filtrado * 100
-            ).round(1)
+        texto_filtros = " · ".join(filtros_activos) if filtros_activos else "Vista general · Sin filtros"
+        st.markdown(
+            f"""
+            <div style="padding:0.8rem 1rem;border:1px solid #d9d9d9;border-radius:0.6rem;margin:0.5rem 0 1rem 0;">
+                <b>Filtros activos</b><br>{html.escape(texto_filtros)}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            # Mostramos TODOS los juzgados y permitimos pulsar para filtrar.
-            # La tabla mantiene el orden por carga/porcentaje, pero las tarjetas se ordenan por nº de juzgado.
-            resumen_cards = resumen_juzgado.copy()
+        total_base = len(df_base)
+        total_filtrado = len(filtrado)
+        porcentaje_global = (total_filtrado / total_base * 100) if total_base else 0.0
+        num_juzgados_base = int(df_base["Órgano completo"].replace("", pd.NA).dropna().nunique()) if total_base else 0
 
-            resumen_cards["_orden_juzgado"] = pd.to_numeric(
-                resumen_cards["Nº Juzgado"],
-                errors="coerce",
-            )
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Resultado", f"{total_filtrado:,}".replace(",", "."))
+        k2.metric("Base analizada", f"{total_base:,}".replace(",", "."))
+        k3.metric("Porcentaje", f"{porcentaje_global:.1f}%".replace(".", ","))
+        k4.metric("Juzgados", num_juzgados_base)
 
-            resumen_cards = (
-                resumen_cards
-                .sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last")
-                .drop(columns=["_orden_juzgado"])
-                .reset_index(drop=True)
-            )
+        st.caption(
+            f"Resultado global: {total_filtrado:,} de {total_base:,} expedientes · {porcentaje_global:.1f}%"
+            .replace(",", "X", 2).replace(".", ",").replace("X", ".")
+        )
 
-            for inicio in range(0, len(resumen_cards), 4):
-                cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
+        # El denominador por juzgado es siempre la base de ese órgano ANTES de filtros.
+        base_juzgado = (
+            df_base.groupby(["Nº Juzgado", "Tipo órgano", "Sección", "Órgano completo"], dropna=False)
+            .size().reset_index(name="Total juzgado")
+        )
+        filtrado_juzgado = (
+            filtrado.groupby(["Nº Juzgado", "Tipo órgano", "Sección", "Órgano completo"], dropna=False)
+            .size().reset_index(name="Cumplen filtro")
+        )
+        resumen_juzgado = base_juzgado.merge(
+            filtrado_juzgado,
+            on=["Nº Juzgado", "Tipo órgano", "Sección", "Órgano completo"],
+            how="left",
+        )
+        resumen_juzgado["Cumplen filtro"] = resumen_juzgado["Cumplen filtro"].fillna(0).astype(int)
+        resumen_juzgado["%"] = (
+            resumen_juzgado["Cumplen filtro"] / resumen_juzgado["Total juzgado"] * 100
+        ).fillna(0).round(1)
+        resumen_juzgado["_orden_juzgado"] = pd.to_numeric(resumen_juzgado["Nº Juzgado"], errors="coerce")
+        resumen_cards = resumen_juzgado.sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last").reset_index(drop=True)
 
-                for pos, (_, row) in enumerate(resumen_cards.iloc[inicio:inicio + 4].iterrows()):
-                    organo = str(row["Órgano completo"])
-                    etiqueta = "Juzgado " + str(row["Nº Juzgado"] or "sin nº")
-                    with cols_juzgados[pos]:
-                        st.metric(
-                            label=etiqueta,
-                            value=int(row["Expedientes"]),
-                            delta=f'{row["%"]}% del filtro',
-                        )
-                        if st.button(
-                            "Filtrar",
-                            key="btn_filtrar_juzgado_" + str(inicio) + "_" + str(pos),
-                            help="Mostrar solo expedientes de " + organo,
-                        ):
-                            st.session_state.filtro_juzgado_click = organo
-                            st.rerun()
+        st.markdown("#### Comparación por juzgado")
+        for inicio in range(0, len(resumen_cards), 4):
+            cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
+            for pos, (_, row) in enumerate(resumen_cards.iloc[inicio:inicio + 4].iterrows()):
+                organo = str(row["Órgano completo"])
+                etiqueta = "Juzgado " + str(row["Nº Juzgado"] or "sin nº")
+                cumple = int(row["Cumplen filtro"])
+                total_organo = int(row["Total juzgado"])
+                pct = float(row["%"] or 0)
+                with cols_juzgados[pos]:
+                    st.metric(label=etiqueta, value=f"{cumple} / {total_organo}", delta=f"{pct:.1f}%".replace(".", ","))
+                    if st.button(
+                        "Ver expedientes",
+                        key="btn_dashboard_juzgado_" + str(inicio) + "_" + str(pos),
+                        help="Mostrar solo expedientes de " + organo,
+                    ):
+                        st.session_state.filtro_juzgado_click = organo
+                        st.rerun()
 
-            st.dataframe(
-                resumen_juzgado,
-                use_container_width=True,
-                hide_index=True,
-            )
+        if not resumen_juzgado.empty:
+            grafico = resumen_juzgado.sort_values("%", ascending=True).copy()
+            grafico["Juzgado"] = grafico["Nº Juzgado"].fillna("sin nº").astype(str).map(lambda x: "Juzgado " + x)
+            st.bar_chart(grafico.set_index("Juzgado")[["%"]], horizontal=True, use_container_width=True)
 
-        st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df)} totales.")
+            tabla_resumen = resumen_juzgado.drop(columns=["_orden_juzgado"], errors="ignore").sort_values("%", ascending=False)
+            st.dataframe(tabla_resumen, use_container_width=True, hide_index=True)
+
+        st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df_base)} de la base del análisis.")
 
         # La vista exacta para exportar se guarda después de seleccionar columnas visibles.
 

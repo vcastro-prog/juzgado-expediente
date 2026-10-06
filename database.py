@@ -92,6 +92,20 @@ def inicializar(conn):
         """
     )
 
+    # v2.3.0: relación entre expedientes y archivos de origen.
+    # Permite definir una base de análisis concreta para el Dashboard sin
+    # alterar el histórico principal de expedientes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS expediente_fuentes (
+            clave_expediente TEXT,
+            nombre_archivo TEXT,
+            ultima_importacion TEXT,
+            PRIMARY KEY (clave_expediente, nombre_archivo)
+        )
+        """
+    )
+
     if not columna_existe(conn, "expedientes", "favorito"):
         conn.execute("ALTER TABLE expedientes ADD COLUMN favorito INTEGER DEFAULT 0")
 
@@ -291,6 +305,17 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "", progres
                         (ahora, clave),
                     )
 
+            if nombre_archivo:
+                conn.execute(
+                    """
+                    INSERT INTO expediente_fuentes (clave_expediente, nombre_archivo, ultima_importacion)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(clave_expediente, nombre_archivo)
+                    DO UPDATE SET ultima_importacion = excluded.ultima_importacion
+                    """,
+                    (clave, nombre_archivo, ahora),
+                )
+
             if progress_callback and (indice_registro == 1 or indice_registro % 25 == 0 or indice_registro == total_registros):
                 progress_callback(indice_registro, total_registros)
 
@@ -317,6 +342,42 @@ def guardar_importacion(registros: List[Dict], nombre_archivo: str = "", progres
         conn.commit()
 
     return pd.DataFrame(cambios)
+
+def cargar_fuentes_disponibles() -> pd.DataFrame:
+    """Archivos con relación expediente-origen disponible para el Dashboard."""
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                nombre_archivo AS 'Archivo',
+                COUNT(DISTINCT clave_expediente) AS 'Expedientes',
+                MAX(ultima_importacion) AS 'Última importación'
+            FROM expediente_fuentes
+            WHERE COALESCE(nombre_archivo, '') <> ''
+            GROUP BY nombre_archivo
+            ORDER BY MAX(ultima_importacion) DESC, nombre_archivo
+            """,
+            conn,
+        )
+
+
+def cargar_claves_por_fuentes(nombres_archivo) -> list:
+    """Devuelve las claves pertenecientes a uno o varios archivos seleccionados."""
+    nombres = [str(x) for x in (nombres_archivo or []) if str(x).strip()]
+    if not nombres:
+        return []
+    placeholders = ",".join(["?"] * len(nombres))
+    with get_conn() as conn:
+        filas = conn.execute(
+            f"""
+            SELECT DISTINCT clave_expediente
+            FROM expediente_fuentes
+            WHERE nombre_archivo IN ({placeholders})
+            """,
+            nombres,
+        ).fetchall()
+    return [fila["clave_expediente"] for fila in filas]
+
 
 def cargar_expedientes() -> pd.DataFrame:
     with get_conn() as conn:
