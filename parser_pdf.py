@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pdfplumber
 
 
-PARSER_VERSION = "Parser v2.2.2"
+PARSER_VERSION = "Parser v2.2.3"
 
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
@@ -108,10 +108,34 @@ def limpiar_texto(texto: str) -> str:
 
 
 def es_linea_ruido(linea: str) -> bool:
+    """Detecta cabeceras/pies sin eliminar filas reales de expedientes.
+
+    Importante: no se puede buscar simplemente si ``"Procedimiento"`` está
+    contenido en la línea, porque eso elimina filas válidas como
+    ``0001146/2026 Procedimiento ordinario ...``.
+    """
     l = limpiar_texto(linea)
     if not l:
         return True
-    return any(fragmento in l for fragmento in CABECERAS_Y_PIES)
+
+    # Una fila que comienza por número de expediente o resolución nunca es
+    # ruido, aunque contenga palabras que también aparecen en la cabecera.
+    if EXPEDIENTE_RE.match(l) or RESOLUCION_LINE_RE.match(l):
+        return False
+
+    # Cabeceras/pies completos o claramente identificables.
+    if l in {"Observaciones:", "Órgano de registro:", "Órgano de Registro:",
+             "Procedimiento", "Materia", "Fase Procesal", "Último trámite",
+             "Fecha Últ. Tramite", "Fecha Últ. Trámite", "Próximo Trámite",
+             "Intervención Interviniente"}:
+        return True
+
+    prefijos_ruido = (
+        "ALARDE", "Nº Proced.", "Nº resolución", "F. Aceptación",
+        "F. Dictado", "F. public.", "Página:", "Periodo de",
+        "Libro de Resoluciones",
+    )
+    return l.startswith(prefijos_ruido)
 
 
 def extraer_texto(pdf_file) -> str:
@@ -443,15 +467,29 @@ def parsear_bloque_alarde(bloque: str) -> Optional[Dict]:
 
 
 def extraer_expedientes_alarde(pdf_file) -> List[Dict]:
-    texto = extraer_texto(pdf_file)
+    """Extrae ALARDE página a página.
+
+    Procesar todo el PDF como un único texto hacía que el último expediente de
+    una página absorbiera cabeceras, fechas o fragmentos de la página siguiente.
+    Al reconstruir cada página de forma independiente, el cierre de página actúa
+    también como cierre del registro.
+    """
+    textos_paginas = []
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            textos_paginas.append(page.extract_text() or "")
+
+    texto = "\n".join(textos_paginas)
     juzgado_info = extraer_juzgado_info(texto)
 
     registros_base = []
-    bloques = dividir_en_bloques(texto)
-    for bloque in bloques:
-        reg = parsear_bloque_alarde(bloque)
-        if reg and reg.get("numero_procedimiento"):
-            registros_base.append(reg)
+    for numero_pagina, texto_pagina in enumerate(textos_paginas, start=1):
+        bloques = dividir_en_bloques(texto_pagina)
+        for bloque in bloques:
+            reg = parsear_bloque_alarde(bloque)
+            if reg and reg.get("numero_procedimiento"):
+                reg["pagina_pdf"] = numero_pagina
+                registros_base.append(reg)
 
     registros = []
     vistos = set()
