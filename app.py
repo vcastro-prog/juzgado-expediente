@@ -953,9 +953,8 @@ with tab_actuales:
                 """)
 
             st.markdown("".join(filas_html), unsafe_allow_html=True)
-            st.caption("El color compara la situación relativa de los juzgados visibles: verde = mejor; rojo = peor. La longitud representa el porcentaje sobre la base de cada juzgado.")
 
-        st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df_base)} de la base del análisis.")
+        st.caption(f"{len(filtrado):,} expedientes mostrados de {len(df_base):,}".replace(",", "."))
 
         # La vista exacta para exportar se guarda después de seleccionar columnas visibles.
 
