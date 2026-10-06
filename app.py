@@ -899,9 +899,8 @@ with tab_actuales:
         resumen_juzgado["_orden_juzgado"] = pd.to_numeric(resumen_juzgado["Nº Juzgado"], errors="coerce")
         resumen_cards = resumen_juzgado.sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last").reset_index(drop=True)
 
-        # v2.3.4: lectura rápida por juzgado. Los datos principales se sitúan
-        # junto al nombre y las barras mantienen un grosor uniforme. El color
-        # progresa suavemente de verde (mejor situación) a rojo (peor situación).
+        # v2.3.5: una sola línea por juzgado para conservar la perspectiva.
+        # Nombre, datos, porcentaje y barra comparten la misma fila.
         st.markdown("#### Resultado por juzgado")
 
         if not resumen_cards.empty:
@@ -936,18 +935,17 @@ with tab_actuales:
                 pct_txt = f"{pct:.1f}%".replace(".", ",")
                 ancho = max(0.0, min(100.0, pct))
                 filas_html.append(f"""
-                <div style="margin: 0 0 16px 0;">
-                  <div style="display:flex; align-items:center; gap:10px; margin-bottom:7px;
-                              font-family:inherit; font-size:14px; line-height:1.2;">
-                    <span style="min-width:82px; color:#4B5563;">Juzgado {num}</span>
-                    <span style="background:{fondo}; color:{texto}; border-radius:7px;
-                                 padding:4px 9px; min-width:112px; text-align:center;
-                                 font-size:14px; font-weight:600;">{cumplen_txt} / {total_txt}</span>
-                    <span style="background:{fondo}; color:{texto}; border-radius:7px;
-                                 padding:4px 9px; min-width:64px; text-align:center;
-                                 font-size:14px; font-weight:600;">{pct_txt}</span>
-                  </div>
-                  <div style="height:24px; width:100%; background:#F1F3F5; border-radius:4px; overflow:hidden;">
+                <div style="display:flex; align-items:center; gap:12px; margin:0 0 12px 0;
+                            font-family:inherit; font-size:14px; line-height:1.2; width:100%;">
+                  <span style="width:110px; flex:0 0 110px; color:#4B5563; white-space:nowrap;">Juzgado {num}</span>
+                  <span style="background:{fondo}; color:{texto}; border-radius:7px;
+                               padding:5px 10px; width:132px; flex:0 0 132px; text-align:center;
+                               font-size:14px; font-weight:600; white-space:nowrap;">{cumplen_txt} / {total_txt}</span>
+                  <span style="background:{fondo}; color:{texto}; border-radius:7px;
+                               padding:5px 10px; width:72px; flex:0 0 72px; text-align:center;
+                               font-size:14px; font-weight:600; white-space:nowrap;">{pct_txt}</span>
+                  <div style="height:24px; flex:1 1 auto; min-width:180px; background:#F1F3F5;
+                              border-radius:4px; overflow:hidden;">
                     <div style="height:24px; width:{ancho:.2f}%; background:{fondo};
                                 border-radius:4px;"></div>
                   </div>
