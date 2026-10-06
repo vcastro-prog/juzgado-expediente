@@ -899,32 +899,71 @@ with tab_actuales:
         resumen_juzgado["_orden_juzgado"] = pd.to_numeric(resumen_juzgado["Nº Juzgado"], errors="coerce")
         resumen_cards = resumen_juzgado.sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last").reset_index(drop=True)
 
-        st.markdown("#### Comparación por juzgado")
-        for inicio in range(0, len(resumen_cards), 4):
-            cols_juzgados = st.columns(min(4, len(resumen_cards) - inicio))
-            for pos, (_, row) in enumerate(resumen_cards.iloc[inicio:inicio + 4].iterrows()):
-                organo = str(row["Órgano completo"])
-                etiqueta = "Juzgado " + str(row["Nº Juzgado"] or "sin nº")
-                cumple = int(row["Cumplen filtro"])
-                total_organo = int(row["Total juzgado"])
-                pct = float(row["%"] or 0)
-                with cols_juzgados[pos]:
-                    st.metric(label=etiqueta, value=f"{cumple} / {total_organo}", delta=f"{pct:.1f}%".replace(".", ","))
-                    if st.button(
-                        "Ver expedientes",
-                        key="btn_dashboard_juzgado_" + str(inicio) + "_" + str(pos),
-                        help="Mostrar solo expedientes de " + organo,
-                    ):
-                        st.session_state.filtro_juzgado_click = organo
-                        st.rerun()
+        # v2.3.2: una sola visualización, sin tarjetas ni tabla duplicada.
+        # El orden es numérico por nº de juzgado y cada barra muestra
+        # resultado / total y porcentaje en la propia gráfica.
+        st.markdown("#### Resultado por juzgado")
 
-        if not resumen_juzgado.empty:
-            grafico = resumen_juzgado.sort_values("%", ascending=True).copy()
+        if not resumen_cards.empty:
+            grafico = resumen_cards.copy()
             grafico["Juzgado"] = grafico["Nº Juzgado"].fillna("sin nº").astype(str).map(lambda x: "Juzgado " + x)
-            st.bar_chart(grafico.set_index("Juzgado")[["%"]], horizontal=True, use_container_width=True)
+            grafico["Etiqueta"] = grafico.apply(
+                lambda r: (
+                    f"{int(r['Cumplen filtro']):,} / {int(r['Total juzgado']):,} · {float(r['%']):.1f}%"
+                    .replace(",", "X").replace(".", ",").replace("X", ".")
+                ),
+                axis=1,
+            )
+            grafico["Orden"] = range(len(grafico))
 
-            tabla_resumen = resumen_juzgado.drop(columns=["_orden_juzgado"], errors="ignore").sort_values("%", ascending=False)
-            st.dataframe(tabla_resumen, use_container_width=True, hide_index=True)
+            datos_grafico = grafico[["Juzgado", "%", "Etiqueta", "Orden"]].to_dict("records")
+            max_pct = float(grafico["%"].max()) if len(grafico) else 0.0
+            limite_x = max(5.0, max_pct * 1.28 + 1.0)
+
+            especificacion = {
+                "data": {"values": datos_grafico},
+                "height": max(180, 48 * len(datos_grafico)),
+                "layer": [
+                    {
+                        "mark": {"type": "bar", "cornerRadiusEnd": 4, "height": 24},
+                        "encoding": {
+                            "y": {
+                                "field": "Juzgado",
+                                "type": "nominal",
+                                "sort": {"field": "Orden", "order": "ascending"},
+                                "axis": {"title": None, "labelFontSize": 13},
+                            },
+                            "x": {
+                                "field": "%",
+                                "type": "quantitative",
+                                "scale": {"domain": [0, limite_x]},
+                                "axis": {"title": "Porcentaje sobre la base del juzgado", "format": ".1f"},
+                            },
+                            "tooltip": [
+                                {"field": "Juzgado", "type": "nominal", "title": "Juzgado"},
+                                {"field": "Etiqueta", "type": "nominal", "title": "Resultado"},
+                            ],
+                        },
+                    },
+                    {
+                        "mark": {"type": "text", "align": "left", "baseline": "middle", "dx": 8, "fontSize": 13},
+                        "encoding": {
+                            "y": {
+                                "field": "Juzgado",
+                                "type": "nominal",
+                                "sort": {"field": "Orden", "order": "ascending"},
+                            },
+                            "x": {"field": "%", "type": "quantitative", "scale": {"domain": [0, limite_x]}},
+                            "text": {"field": "Etiqueta", "type": "nominal"},
+                        },
+                    },
+                ],
+                "config": {
+                    "view": {"stroke": None},
+                    "axis": {"grid": True, "gridOpacity": 0.15},
+                },
+            }
+            st.vega_lite_chart(especificacion, use_container_width=True)
 
         st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df_base)} de la base del análisis.")
 
