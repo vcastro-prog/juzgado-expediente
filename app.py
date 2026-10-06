@@ -899,34 +899,63 @@ with tab_actuales:
         resumen_juzgado["_orden_juzgado"] = pd.to_numeric(resumen_juzgado["Nº Juzgado"], errors="coerce")
         resumen_cards = resumen_juzgado.sort_values(["_orden_juzgado", "Nº Juzgado"], na_position="last").reset_index(drop=True)
 
-        # v2.3.3: comparación compacta. Los datos clave quedan junto al nombre
-        # del juzgado y la barra actúa como apoyo visual del porcentaje.
+        # v2.3.4: lectura rápida por juzgado. Los datos principales se sitúan
+        # junto al nombre y las barras mantienen un grosor uniforme. El color
+        # progresa suavemente de verde (mejor situación) a rojo (peor situación).
         st.markdown("#### Resultado por juzgado")
 
         if not resumen_cards.empty:
-            for _, r in resumen_cards.iterrows():
-                numero = str(r["Nº Juzgado"] or "sin nº")
+            grafico = resumen_cards.copy()
+            min_pct = float(grafico["%"].min()) if len(grafico) else 0.0
+            max_pct = float(grafico["%"].max()) if len(grafico) else 0.0
+            rango_pct = max_pct - min_pct
+
+            def color_estado(pct):
+                # Escala relativa suave. Si las diferencias son mínimas, evitamos
+                # presentar contrastes fuertes que exageren la comparación.
+                if rango_pct < 3.0:
+                    return "#D9EAD3", "#365B35"
+                t = (float(pct) - min_pct) / rango_pct if rango_pct else 0.0
+                if t <= 0.25:
+                    return "#D9EAD3", "#365B35"
+                if t <= 0.50:
+                    return "#E8E6B8", "#5D5A2B"
+                if t <= 0.75:
+                    return "#F6D6A8", "#745020"
+                return "#E8B4AE", "#713A35"
+
+            filas_html = []
+            for _, r in grafico.iterrows():
+                num = str(r["Nº Juzgado"] or "sin nº")
                 cumplen = int(r["Cumplen filtro"])
                 total = int(r["Total juzgado"])
                 pct = float(r["%"] or 0.0)
-
+                fondo, texto = color_estado(pct)
                 cumplen_txt = f"{cumplen:,}".replace(",", ".")
                 total_txt = f"{total:,}".replace(",", ".")
-                pct_txt = f"{pct:.1f}".replace(".", ",")
+                pct_txt = f"{pct:.1f}%".replace(".", ",")
+                ancho = max(0.0, min(100.0, pct))
+                filas_html.append(f"""
+                <div style="margin: 0 0 16px 0;">
+                  <div style="display:flex; align-items:center; gap:10px; margin-bottom:7px;
+                              font-family:inherit; font-size:14px; line-height:1.2;">
+                    <span style="min-width:82px; color:#4B5563;">Juzgado {num}</span>
+                    <span style="background:{fondo}; color:{texto}; border-radius:7px;
+                                 padding:4px 9px; min-width:112px; text-align:center;
+                                 font-size:14px; font-weight:600;">{cumplen_txt} / {total_txt}</span>
+                    <span style="background:{fondo}; color:{texto}; border-radius:7px;
+                                 padding:4px 9px; min-width:64px; text-align:center;
+                                 font-size:14px; font-weight:600;">{pct_txt}</span>
+                  </div>
+                  <div style="height:24px; width:100%; background:#F1F3F5; border-radius:4px; overflow:hidden;">
+                    <div style="height:24px; width:{ancho:.2f}%; background:{fondo};
+                                border-radius:4px;"></div>
+                  </div>
+                </div>
+                """)
 
-                col_dato, col_barra = st.columns([2.15, 5.85], vertical_alignment="center")
-                with col_dato:
-                    st.markdown(
-                        f"**Juzgado {numero}** &nbsp;&nbsp; "
-                        f"<span style='font-size:1.28rem;font-weight:700'>{cumplen_txt}</span>"
-                        f"<span style='color:#7a7f87'> / {total_txt}</span> &nbsp;&nbsp; "
-                        f"<span style='font-size:1.28rem;font-weight:700'>{pct_txt} %</span>",
-                        unsafe_allow_html=True,
-                    )
-                with col_barra:
-                    # st.progress trabaja de 0 a 100 y conserva una escala común
-                    # entre juzgados, por lo que las barras son comparables de un vistazo.
-                    st.progress(max(0.0, min(pct / 100.0, 1.0)))
+            st.markdown("".join(filas_html), unsafe_allow_html=True)
+            st.caption("El color compara la situación relativa de los juzgados visibles: verde = mejor; rojo = peor. La longitud representa el porcentaje sobre la base de cada juzgado.")
 
         st.caption(f"Expedientes mostrados en la tabla inferior: {len(filtrado)} de {len(df_base)} de la base del análisis.")
 
