@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Tuple
@@ -28,12 +29,17 @@ CAMPOS_ESTADO = [
 ]
 
 
+@contextmanager
 def get_conn():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    inicializar(conn)
-    return conn
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        conn.row_factory = sqlite3.Row
+        inicializar(conn)
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def columna_existe(conn, tabla: str, columna: str) -> bool:
@@ -517,7 +523,10 @@ def guardar_favorito_nota(clave_expediente: str, favorito: bool, nota: str):
 
 
 def resetear_base():
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    with get_conn():
-        pass
+    # Clear in one transaction; open Windows handles no longer block deletion.
+    with get_conn() as conn:
+        conn.execute("DELETE FROM expediente_fuentes")
+        conn.execute("DELETE FROM historico_cambios")
+        conn.execute("DELETE FROM importaciones")
+        conn.execute("DELETE FROM expedientes")
+        conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('historico_cambios', 'importaciones')")

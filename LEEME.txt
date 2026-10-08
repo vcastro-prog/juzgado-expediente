@@ -1,0 +1,5 @@
+Actualización preparada para Streamlit Cloud.
+Sustituir o añadir los siete archivos .py/requirements.txt en el repositorio y publicar con el flujo habitual de GitHub.
+Usar Python 3.13 (igual que la instalación probada en Acer).
+Conservar APP_PASSWORD en Secrets de Streamlit Cloud.
+Este paquete no incluye contraseñas, PDFs ni SQLite.

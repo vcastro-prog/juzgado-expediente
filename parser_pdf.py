@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pdfplumber
 
 
-PARSER_VERSION = "Parser v2.2.5"
+PARSER_VERSION = "Parser v2.2.5-local.1"
 
 
 EXPEDIENTE_RE = re.compile(r"^\d{7}/\d{4}\b")
@@ -580,21 +580,22 @@ def _extraer_registros_pagina_alarde(page, numero_pagina: int) -> List[Dict]:
     return registros
 
 
-def extraer_expedientes_alarde(pdf_file, texto=None, progress_callback=None) -> List[Dict]:
+def extraer_expedientes_alarde(pdf_file, texto=None, progress_callback=None, registros_base=None) -> List[Dict]:
     """Extrae ALARDE por página y por coordenadas de columna."""
     # Reutiliza el texto global ya extraído para no leer el PDF innecesariamente dos veces.
     if texto is None:
         texto = extraer_texto(pdf_file, progress_callback=progress_callback)
     juzgado_info = extraer_juzgado_info(texto)
 
-    registros_base = []
-    with pdfplumber.open(pdf_file) as pdf:
-        total_paginas = max(len(pdf.pages), 1)
-        for numero_pagina, page in enumerate(pdf.pages, start=1):
-            nuevos_pagina = _extraer_registros_pagina_alarde(page, numero_pagina)
-            registros_base.extend(nuevos_pagina)
-            if progress_callback:
-                progress_callback("leyendo", numero_pagina, total_paginas, len(registros_base))
+    if registros_base is None:
+        registros_base = []
+        with pdfplumber.open(pdf_file) as pdf:
+            total_paginas = max(len(pdf.pages), 1)
+            for numero_pagina, page in enumerate(pdf.pages, start=1):
+                nuevos_pagina = _extraer_registros_pagina_alarde(page, numero_pagina)
+                registros_base.extend(nuevos_pagina)
+                if progress_callback:
+                    progress_callback("leyendo", numero_pagina, total_paginas, len(registros_base))
 
     registros = []
     vistos = set()
@@ -646,7 +647,7 @@ def limpiar_lineas_pagina_libro(texto_pagina: str) -> List[str]:
     return lineas
 
 
-def segmentar_registros_libro(pdf_file, progress_callback=None) -> List[Tuple[List[str], str, int]]:
+def segmentar_registros_libro(pdf_file, progress_callback=None, textos_paginas=None) -> List[Tuple[List[str], str, int]]:
     """
     Devuelve cada bloque junto con:
     - el tipo de resolución de su página;
@@ -658,40 +659,44 @@ def segmentar_registros_libro(pdf_file, progress_callback=None) -> List[Tuple[Li
     registros = []
     ultimo_tipo_detectado = "Resolución"
 
-    with pdfplumber.open(pdf_file) as pdf:
-        total_paginas = max(len(pdf.pages), 1)
-        for numero_pagina, page in enumerate(pdf.pages, start=1):
-            texto_pagina = page.extract_text() or ""
-            if progress_callback:
-                progress_callback("leyendo", numero_pagina, total_paginas, len(registros))
+    if textos_paginas is None:
+        with pdfplumber.open(pdf_file) as pdf:
+            textos_paginas = []
+            for page in pdf.pages:
+                textos_paginas.append(page.extract_text() or "")
+                page.close()
+    total_paginas = max(len(textos_paginas), 1)
+    for numero_pagina, texto_pagina in enumerate(textos_paginas, start=1):
+        if progress_callback:
+            progress_callback("leyendo", numero_pagina, total_paginas, len(registros))
 
-            m_tipo = re.search(
-                r"Tipo Resolución:\s*([^\n\r]+)",
-                texto_pagina,
-                re.IGNORECASE,
+        m_tipo = re.search(
+            r"Tipo Resolución:\s*([^\n\r]+)",
+            texto_pagina,
+            re.IGNORECASE,
+        )
+
+        if m_tipo:
+            ultimo_tipo_detectado = limpiar_texto(m_tipo.group(1))
+
+        tipo_pagina = ultimo_tipo_detectado
+        lineas = limpiar_lineas_pagina_libro(texto_pagina)
+        actual = []
+
+        for linea in lineas:
+            if RESOLUCION_LINE_RE.match(linea):
+                if actual:
+                    registros.append(
+                        (actual, tipo_pagina, numero_pagina)
+                    )
+                actual = [linea]
+            elif actual:
+                actual.append(linea)
+
+        if actual:
+            registros.append(
+                (actual, tipo_pagina, numero_pagina)
             )
-
-            if m_tipo:
-                ultimo_tipo_detectado = limpiar_texto(m_tipo.group(1))
-
-            tipo_pagina = ultimo_tipo_detectado
-            lineas = limpiar_lineas_pagina_libro(texto_pagina)
-            actual = []
-
-            for linea in lineas:
-                if RESOLUCION_LINE_RE.match(linea):
-                    if actual:
-                        registros.append(
-                            (actual, tipo_pagina, numero_pagina)
-                        )
-                    actual = [linea]
-                elif actual:
-                    actual.append(linea)
-
-            if actual:
-                registros.append(
-                    (actual, tipo_pagina, numero_pagina)
-                )
 
     return registros
 
@@ -785,11 +790,11 @@ def parsear_registro_libro(lineas: List[str], tipo_resolucion: str,
     return reg
 
 
-def extraer_expedientes_libro_resoluciones(pdf_file, texto=None, progress_callback=None) -> List[Dict]:
+def extraer_expedientes_libro_resoluciones(pdf_file, texto=None, progress_callback=None, textos_paginas=None) -> List[Dict]:
     if texto is None:
         texto = extraer_texto(pdf_file, progress_callback=progress_callback)
     juzgado_info = extraer_juzgado_info(texto)
-    bloques = segmentar_registros_libro(pdf_file, progress_callback=progress_callback)
+    bloques = segmentar_registros_libro(pdf_file, progress_callback=progress_callback, textos_paginas=textos_paginas)
 
     registros = []
     vistos = set()
@@ -813,18 +818,32 @@ def extraer_expedientes_libro_resoluciones(pdf_file, texto=None, progress_callba
     return registros
 
 def extraer_expedientes(pdf_file, progress_callback=None) -> List[Dict]:
-    texto = extraer_texto(pdf_file, progress_callback=progress_callback)
+    # Retain only extracted strings, not the expensive page object caches.
+    textos_paginas = []
+    registros_base = []
+    tipo_inicial = None
+    with pdfplumber.open(pdf_file) as pdf:
+        total = max(len(pdf.pages), 1)
+        for idx, page in enumerate(pdf.pages, start=1):
+            textos_paginas.append(page.extract_text() or "")
+            if tipo_inicial is None:
+                tipo_inicial = detectar_tipo_pdf(textos_paginas[0])
+            if tipo_inicial != "libro_resoluciones":
+                registros_base.extend(_extraer_registros_pagina_alarde(page, idx))
+            page.close()
+            if progress_callback:
+                progress_callback("preparando", idx, total, 0)
+    texto = "\n".join(textos_paginas)
     tipo = detectar_tipo_pdf(texto)
-
     if tipo == "libro_resoluciones":
-        return extraer_expedientes_libro_resoluciones(pdf_file, texto=texto, progress_callback=progress_callback)
-
-    if tipo == "alarde":
-        return extraer_expedientes_alarde(pdf_file, texto=texto, progress_callback=progress_callback)
-
-    if EXPEDIENTE_ANY_RE.search(texto):
-        return extraer_expedientes_alarde(pdf_file, texto=texto, progress_callback=progress_callback)
-
+        return extraer_expedientes_libro_resoluciones(
+            pdf_file, texto=texto, progress_callback=progress_callback,
+            textos_paginas=textos_paginas,
+        )
+    if tipo == "alarde" or EXPEDIENTE_ANY_RE.search(texto):
+        if progress_callback:
+            progress_callback("leyendo", total, total, len(registros_base))
+        return extraer_expedientes_alarde(pdf_file, texto=texto, progress_callback=progress_callback, registros_base=registros_base)
     raise PDFNoReconocidoError(
         "No se reconoce el tipo de PDF. Actualmente se soportan ALARDE y Libro de Resoluciones."
     )

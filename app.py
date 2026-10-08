@@ -1,4 +1,8 @@
 from io import BytesIO
+import hashlib
+from local_cache import cached_read, cached_backup, database_revision
+from time import perf_counter
+from sqlite_backups import snapshot, restore
 from datetime import datetime, timedelta
 import shutil
 import html
@@ -241,7 +245,7 @@ def descargar_excel(df_dict):
 
 def leer_backup_sqlite():
     if DB_PATH.exists():
-        return DB_PATH.read_bytes()
+        return cached_backup(str(DB_PATH.resolve()), database_revision(DB_PATH))
     return None
 
 
@@ -262,9 +266,7 @@ def info_backup_sqlite():
 
 
 def restaurar_backup_sqlite(archivo_subido):
-    DB_PATH.parent.mkdir(exist_ok=True)
-    with open(DB_PATH, "wb") as f:
-        f.write(archivo_subido.getbuffer())
+    return restore(DB_PATH, archivo_subido.getvalue())
 
 
 def normalizar_texto(valor):
@@ -382,6 +384,8 @@ with st.sidebar:
 
             for indice_pdf, pdf in enumerate(pdfs, start=1):
                 try:
+                    inicio_pdf = perf_counter()
+                    tiempos_pdf = {}
                     progreso_pdf = {"paginas": 0, "detectados": 0}
                     registros_detectados = 0
                     base_pdf = (indice_pdf - 1) / max(total_pdfs, 1)
@@ -392,9 +396,11 @@ with st.sidebar:
                         progreso_pdf["paginas"] = total or progreso_pdf["paginas"]
                         progreso_pdf["detectados"] = detectados or progreso_pdf["detectados"]
                         proporcion = (actual / max(total, 1))
+                        if fase == "preparando" and actual == total:
+                            tiempos_pdf["lectura"] = perf_counter() - inicio_pdf
                         if fase == "preparando":
                             local = 0.05 + 0.20 * proporcion
-                            detalle = f"Analizando estructura: página {actual} de {total}"
+                            detalle = f"Analizando y extrayendo: página {actual} de {total}"
                         else:
                             local = 0.25 + 0.55 * proporcion
                             detalle = f"Leyendo página {actual} de {total} · Expedientes detectados: {detectados}"
@@ -412,6 +418,7 @@ with st.sidebar:
                         progress_callback=actualizar_progreso_parser,
                     )
 
+                    fin_extraccion = perf_counter()
                     tipo_pdf = registros[0].get("tipo_documento", "") if registros else ""
                     if tipo_pdf == "libro_resoluciones":
                         tipo_pdf_visible = "Libro de Resoluciones"
@@ -431,12 +438,14 @@ with st.sidebar:
                             f"Archivo {indice_pdf} de {total_pdfs} · Comparando y guardando expediente {actual} de {total}"
                         )
 
+                    inicio_guardado = perf_counter()
                     cambios = guardar_importacion(
                         registros,
                         nombre_archivo=pdf.name,
                         progress_callback=actualizar_progreso_bd,
                     )
 
+                    fin_guardado = perf_counter()
                     total_registros += len(registros)
                     total_cambios += len(cambios)
 
@@ -448,6 +457,10 @@ with st.sidebar:
                             "Parser": PARSER_VERSION,
                             "Expedientes leídos": len(registros),
                             "Cambios/nuevos detectados": len(cambios),
+                            "Lectura y extracción (s)": round(tiempos_pdf.get("lectura", fin_extraccion - inicio_pdf), 2),
+                            "Validación y registros (s)": round(max(0, fin_extraccion - inicio_pdf - tiempos_pdf.get("lectura", 0)), 2),
+                            "Guardado SQLite (s)": round(fin_guardado - inicio_guardado, 2),
+                            "Total PDF (s)": round(fin_guardado - inicio_pdf, 2),
                             "Estado": "Procesado",
                         }
                     )
@@ -501,11 +514,14 @@ with st.sidebar:
             st.info(f"Cambios/nuevos detectados: {total_cambios}")
 
             if resumen_importacion:
-                st.subheader("Resumen de importación")
-                st.dataframe(
-                    pd.DataFrame(resumen_importacion),
-                    use_container_width=True,
-                )
+                with st.expander("Resumen de importación", expanded=False):
+                    st.dataframe(
+                        pd.DataFrame(resumen_importacion).reindex(columns=[
+                            "Archivo", "Expedientes leídos", "Cambios/nuevos detectados", "Estado"
+                        ]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             st.warning(
                 "Importación terminada. Descarga ahora una copia SQLite desde "
@@ -515,9 +531,11 @@ with st.sidebar:
 
     st.divider()
     st.header("Backup / Restauración")
+    if st.session_state.get("mensaje_restauracion"):
+        st.success(st.session_state.pop("mensaje_restauracion"))
     st.caption(
         "Guarda una copia después de cada importación. "
-        "Si Streamlit pierde la base local, restaura este archivo y no tendrás que volver a subir PDFs antiguos."
+        "Puedes restaurarla para retomar este análisis. Reiniciar la aplicación local no borra la base."
     )
 
     info_backup = info_backup_sqlite()
@@ -549,8 +567,16 @@ with st.sidebar:
             "Restaurar una copia sustituirá la base local actual por el archivo subido."
         )
         if st.button("Restaurar copia SQLite", type="primary"):
-            restaurar_backup_sqlite(backup_subido)
-            st.success("Copia restaurada. Recarga la página para ver los datos.")
+            try:
+                copia_anterior = restaurar_backup_sqlite(backup_subido)
+            except Exception as exc:
+                st.error(f"No se ha podido restaurar la copia: {exc}")
+            else:
+                st.session_state["mensaje_restauracion"] = (
+                    "Copia restaurada. La base anterior se conserva en data/antes_de_restaurar."
+                    if copia_anterior else "Copia restaurada."
+                )
+                st.rerun()
 
     st.divider()
     st.warning("Zona de mantenimiento")
@@ -560,11 +586,11 @@ with st.sidebar:
         st.success("Base reiniciada. Recarga la página si no ves los cambios.")
 
 
-df = cargar_expedientes()
-df_cambios = cargar_cambios()
-df_importaciones = cargar_importaciones()
+df = cached_read("cargar_expedientes", str(DB_PATH.resolve()), database_revision(DB_PATH))
+df_cambios = cached_read("cargar_cambios", str(DB_PATH.resolve()), database_revision(DB_PATH))
+df_importaciones = cached_read("cargar_importaciones", str(DB_PATH.resolve()), database_revision(DB_PATH))
 try:
-    df_fuentes = cargar_fuentes_disponibles() if SOPORTE_FUENTES else pd.DataFrame()
+    df_fuentes = cached_read("cargar_fuentes_disponibles", str(DB_PATH.resolve()), database_revision(DB_PATH)) if SOPORTE_FUENTES else pd.DataFrame()
 except Exception:
     # La procedencia de archivos no debe impedir nunca el arranque de ALARDE.
     df_fuentes = pd.DataFrame()
@@ -623,7 +649,7 @@ with tab_actuales:
                 key="dashboard_archivos_base",
                 help="El denominador de cada juzgado se calcula sobre estos archivos, antes de aplicar los filtros.",
             )
-            claves_base = cargar_claves_por_fuentes(archivos_base)
+            claves_base = cached_read("cargar_claves_por_fuentes", str(DB_PATH.resolve()), database_revision(DB_PATH), tuple(archivos_base))
             df_base = df[df["clave_expediente"].isin(claves_base)].copy() if archivos_base else df.iloc[0:0].copy()
 
             if archivos_base:
@@ -1219,7 +1245,7 @@ with tab_exportar:
 
     df_filtrado_exportar = st.session_state.df_exportar_filtrado
 
-    if df_filtrado_exportar is None or df_filtrado_exportar.empty:
+    if df_filtrado_exportar is None:
         df_filtrado_exportar = df.copy()
 
     st.info(st.session_state.descripcion_exportacion)
@@ -1249,16 +1275,37 @@ with tab_exportar:
     if incluir_importaciones:
         hojas["Importaciones"] = df_importaciones
 
-    excel = descargar_excel(hojas)
+    # Identify the exact view, column order and optional sheets to avoid stale downloads.
+    firma = hashlib.sha256()
+    for titulo, datos in hojas.items():
+        firma.update(titulo.encode("utf-8"))
+        firma.update(repr(list(zip(datos.columns, map(str, datos.dtypes)))).encode("utf-8"))
+        firma.update(pd.util.hash_pandas_object(datos, index=True).values.tobytes())
+    firma_excel = firma.hexdigest()
+    preparado = st.session_state.get("excel_preparado")
+    if preparado and preparado["firma"] != firma_excel:
+        del st.session_state["excel_preparado"]
+        preparado = None
 
-    nombre = f"expedientes_filtrados_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    if st.button("Preparar Excel", key="preparar_excel"):
+        with st.spinner("Preparando Excel con los filtros actuales…"):
+            preparado = {
+                "firma": firma_excel,
+                "datos": descargar_excel(hojas),
+                "nombre": f"expedientes_filtrados_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            }
+            st.session_state["excel_preparado"] = preparado
 
-    st.download_button(
-        "Descargar Excel filtrado",
-        data=excel,
-        file_name=nombre,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    if preparado:
+        st.download_button(
+            "Descargar Excel filtrado",
+            data=preparado["datos"],
+            file_name=preparado["nombre"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            on_click="ignore",
+        )
+    else:
+        st.caption("Pulsa Preparar Excel cuando hayas terminado de ajustar los filtros. Si cambias la vista, prepara una nueva descarga.")
 
     st.info(
         "El Excel es útil para consultar y compartir datos, pero la copia completa recomendada "
