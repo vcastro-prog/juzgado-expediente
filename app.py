@@ -1,4 +1,5 @@
 from io import BytesIO
+import base64
 import hashlib
 from local_cache import cached_read, cached_backup, database_revision
 from time import perf_counter
@@ -93,16 +94,19 @@ except ImportError:
         return []
 
 
+LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#334155" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M32 10v43M20 56h24M25 52h14M12 20h40"/><circle cx="32" cy="14" r="4" fill="#334155" stroke="none"/><path d="M15 20 7 38h16L15 20Zm34 0-8 18h16l-8-18Z"/><path d="M7 38c0 10 16 10 16 0M41 38c0 10 16 10 16 0" fill="#c9a44c"/></svg>'
+LOGO_URI = "data:image/svg+xml;base64," + base64.b64encode(LOGO_SVG.encode("utf-8")).decode("ascii")
+
 st.set_page_config(
     page_title="Control de expedientes V2",
-    page_icon="⚖️",
+    page_icon=LOGO_URI,
     layout="wide",
 )
 
 st.markdown(
     f"""
-    <div style="display:flex; align-items:baseline; gap:14px; margin-bottom:0.4rem;">
-        <h1 style="margin:0;">⚖️ Control de procedimientos del juzgado</h1>
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:0.4rem;">
+        <h1 style="margin:0; display:flex; align-items:center; gap:14px;"><img src="{LOGO_URI}" alt="" width="48" height="48" style="flex-shrink:0;">Control de procedimientos del juzgado</h1>
         <span style="font-size:0.95rem; color:gray; white-space:nowrap;">
             Versión {APP_VERSION} · Build {BUILD_DATE} · {PARSER_VERSION}
         </span>
